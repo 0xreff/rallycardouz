@@ -1,93 +1,100 @@
-# c
+# Reborn Racer — 2026 (Web)
 
+A browser-based, Re-Volt–*inspired* RC racing game. **All game assets are
+original.** The original Re-Volt files in the parent folder are used only as a
+**design and physics reference** (handling feel, tuning ratios, level layout
+ideas, shader techniques) — no copyrighted meshes, textures, or audio are
+shipped here.
 
+## Tech stack
+- **Three.js** — WebGL rendering, custom GLSL (rim-light glow), post chain:
+  RenderPass → UnrealBloom → OutputPass (ACES tone map + sRGB) → SMAA
+- **Rapier** (WebAssembly) — physics + built-in raycast vehicle controller,
+  stepped at a **fixed 60 Hz** (accumulator with capped substeps) so handling
+  is deterministic and framerate-independent
+- **TypeScript + Vite** — typed code, fast dev server / bundling
+- **Vitest** — unit tests for the pure handling math (`src/game/handling.ts`)
+- **Socket.io + Node** — real-time multiplayer (planned, Phase 5)
 
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
+## Run it
+```bash
+npm install
+npm run dev        # http://localhost:5173
+npm run build      # production bundle in dist/ (static — host anywhere)
+npm test           # handling-math unit tests
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/ferrea/c.git
-git branch -M main
-git push -uf origin main
-```
 
-## Integrate with your tools
+## Controls
+- **W / ↑** accelerate · **S / ↓** front brake & reverse
+- **A D / ← →** steer · **Space** handbrake (full stop)
+- **F** flip upright · **R** reset to start · **C** change car
 
-* [Set up project integrations](https://gitlab.com/ferrea/c/-/settings/integrations)
-
-## Collaborate with your team
-
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+## Engine notes
+- **Fixed-timestep physics** — `Physics.step` accumulates real frame time and
+  advances the Rapier world in fixed 1/60 s substeps (max 4 per frame, extra
+  time dropped). Vehicle forces are applied per-substep from the game loop, so
+  a 45 fps laptop and a 144 Hz monitor produce identical handling.
+- **Surface model** — every static collider registers a surface type in
+  `game/Surfaces.ts` (terrain = **dirt**, road/curbs/ramps = **tarmac**,
+  perimeter = wall). Each car probes the surface under every wheel with a short
+  downward ray each substep, then scales axle side-friction, per-wheel engine
+  traction and brake deceleration: full bite on the road; wide, loose and
+  longer-stopping on dirt — the rally-game core.
+- **Handling model** — fully spec-driven (`game/CarSpec.ts`, no tuning in
+  `Car.ts`): static→kinetic slip per axle, weight transfer, friction circle,
+  lockup/skid, lift-off oversteer, persistent tail-out slip, cosmetic body lean.
+- **Particles & marks** — pooled, zero-allocation-per-frame systems: tyre smoke
+  (tarmac slip), **dust trails** (dirt × speed/slip, thrown back along travel),
+  collision sparks at real contact points, InstancedMesh skid marks.
+- **Rendering** — all geometry is procedural (~25 draw calls); one tight
+  car-following shadow frustum instead of a huge map-wide shadow map; SMAA in
+  the composer (canvas MSAA is bypassed by offscreen targets, so it was dropped).
 
 ## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+1. ✅ Drivable prototype (car physics, chase cam, test track, rim look, bloom)
+2. ✅ Handling & feel (slip/braking model, fixed 60 Hz timestep, surface grip:
+   tarmac vs dirt, dust trails, SMAA)
+3. Visual identity / 2026 look (original models, textures, themed track, skybox)
+   — add Draco/KTX2 asset compression + LOD here, once real assets exist
+4. Lap system & single-player race (checkpoints, timer, AI/time-trial)
+5. Multiplayer (Node + Socket.io lobby & sync)
+6. Deploy & embed on the blog (static `dist/` client + Node server)
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## Project layout
+```
+src/
+  main.ts                 entry / boot (async Rapier WASM init + loader overlay)
+  engine/
+    Input.ts              keyboard → control state
+    ChaseCamera.ts        smooth trailing camera (speed/impact aware)
+    RimMaterial.ts        PBR + signature rim-glow (ported from model_fs.glsl)
+    SkidMarks.ts          InstancedMesh pool of tyre marks
+    Sparks.ts             collision spark particles
+    Smoke.ts              tyre-smoke point sprites (tarmac)
+    Dust.ts               loose-surface dust trails (dirt)
+  physics/
+    Physics.ts            Rapier world wrapper — fixed 60 Hz substep accumulator
+  game/
+    Car.ts                chassis + raycast vehicle controller + surface probing
+    CarSpec.ts            per-car tuning + the roster (Bolt / Hornet / Tank)
+    CarFX.ts              routes car state → sparks / skids / smoke / dust
+    Surfaces.ts           surface registry: tarmac / dirt / wall → grip, dust
+    Track.ts              terrain + road + ramps + colliders (surface-tagged)
+    BotController.ts      wandering AI opponent (raycast avoidance)
+    handling.ts           pure handling math (unit-tested in handling.test.ts)
+    Game.ts               renderer, lights, post-processing, game loop
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## Known trade-offs
+- **Fixed 60 Hz without render interpolation** — on 120/144 Hz displays motion
+  can micro-judder (0 or 2 substeps on some frames). Render interpolation of
+  body transforms is the fix if it becomes noticeable.
+- **SMAA instead of MSAA** — the EffectComposer's offscreen targets bypass
+  canvas MSAA, so SMAA does the AA; slightly softer than 4× MSAA but honest
+  (before, no AA was actually applied).
+- **No texture/model assets yet** — everything is procedural, so Draco/KTX2
+  compression, texture-tiling fixes and LOD are deferred to Phase 3 when real
+  assets land; today's scene is already light (~25 draw calls, one 96×96
+  terrain mesh).
+- **Surface probe cost** — 4 short raycasts per car per substep (≤ 480 rays/s
+  per car); negligible, but worth knowing it scales with car count.

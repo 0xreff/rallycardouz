@@ -1,9 +1,13 @@
+import { inject } from '@vercel/analytics';
 import { Physics } from "./physics/Physics";
 import { Game } from "./game/Game";
 
 async function boot() {
   const container = document.getElementById("app")!;
   const loader = document.getElementById("loader")!;
+
+  // Initialize Vercel Web Analytics
+  inject();
 
   try {
     const physics = await Physics.create();

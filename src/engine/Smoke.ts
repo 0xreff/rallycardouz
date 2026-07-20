@@ -1,19 +1,5 @@
 import * as THREE from "three";
-
-/** Soft round puff texture (white core fading to transparent) used as the smoke sprite. */
-function makePuffTexture(): THREE.Texture {
-  const s = 64;
-  const c = document.createElement("canvas");
-  c.width = c.height = s;
-  const ctx = c.getContext("2d")!;
-  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(0.5, "rgba(255,255,255,0.5)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, s, s);
-  return new THREE.CanvasTexture(c);
-}
+import { getPuffTexture } from "./PuffTexture";
 
 /**
  * Tyre smoke — soft grey puffs that bloom from the wheels under wheelspin or
@@ -41,7 +27,7 @@ export class Smoke {
     this.geo.setAttribute("aLife", new THREE.BufferAttribute(this.aLife, 1));
 
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uMap: { value: makePuffTexture() }, uSize: { value: 95 } },
+      uniforms: { uMap: { value: getPuffTexture() }, uSize: { value: 95 } },
       transparent: true,
       depthWrite: false,
       vertexShader: `

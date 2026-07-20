@@ -12,6 +12,7 @@ export class Sparks {
   private pos: Float32Array;
   private vel: Float32Array;
   private life: Float32Array;
+  private groundY: Float32Array;
   private cursor = 0;
 
   // Black scorch decals left where sparks hit the ground.
@@ -23,6 +24,7 @@ export class Sparks {
     this.pos = new Float32Array(max * 3).fill(-9999); // park unused particles offscreen
     this.vel = new Float32Array(max * 3);
     this.life = new Float32Array(max);
+    this.groundY = new Float32Array(max);
     this.geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
 
     const mat = new THREE.PointsMaterial({
@@ -60,7 +62,7 @@ export class Sparks {
   }
 
   /** Spray `count` sparks from (x,y,z) roughly along `dir`, with random spread. */
-  emit(x: number, y: number, z: number, dir: THREE.Vector3, count: number, speed: number) {
+  emit(x: number, y: number, z: number, dir: THREE.Vector3, count: number, speed: number, groundY: number = 0) {
     for (let n = 0; n < count; n++) {
       const i = this.cursor;
       this.cursor = (this.cursor + 1) % this.max;
@@ -73,6 +75,7 @@ export class Sparks {
       this.vel[i3 + 1] = dir.y * s + Math.random() * speed * 0.7 + 1.0; // bias upward
       this.vel[i3 + 2] = dir.z * s + (Math.random() - 0.5) * speed;
       this.life[i] = 0.15 + Math.random() * 0.3;
+      this.groundY[i] = groundY;
     }
   }
 
@@ -91,8 +94,8 @@ export class Sparks {
       this.pos[i3 + 2] += this.vel[i3 + 2] * dt;
 
       // Landed (or faded): if it hit the ground going down, leave a scorch mark.
-      if (this.pos[i3 + 1] <= 0.04 && this.vel[i3 + 1] < 0) {
-        this.stampScorch(this.pos[i3], this.pos[i3 + 2]);
+      if (this.pos[i3 + 1] <= this.groundY[i] + 0.04 && this.vel[i3 + 1] < 0) {
+        this.stampScorch(this.pos[i3], this.groundY[i] + 0.02, this.pos[i3 + 2]);
         scorchDirty = true;
         this.life[i] = 0;
       }
@@ -102,9 +105,9 @@ export class Sparks {
     if (scorchDirty) this.scorch.instanceMatrix.needsUpdate = true;
   }
 
-  private stampScorch(x: number, z: number) {
+  private stampScorch(x: number, y: number, z: number) {
     const s = 0.14 + Math.random() * 0.18;
-    this.scorchDummy.position.set(x, 0.02, z);
+    this.scorchDummy.position.set(x, y, z);
     this.scorchDummy.rotation.set(0, Math.random() * Math.PI, 0);
     this.scorchDummy.scale.set(s, 1, s);
     this.scorchDummy.updateMatrix();

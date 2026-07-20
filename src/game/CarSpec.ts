@@ -36,17 +36,14 @@ export interface CarSpec {
   launchSpeed: number;   // m/s by which off-the-line boost fades
   launchBoost: number;   // extra fraction of engine force when launching straight
   overspeed: number;      // fraction above topSpeed the car slowly climbs to and
-                          //   tops out at — the REAL max (0.2 = max is +20% over
-                          //   the limit; topSpeed is just where the slow climb begins)
+  //   tops out at — the REAL max (0.2 = max is +20% over
+  //   the limit; topSpeed is just where the slow climb begins)
   overspeedAccel: number; // how fast the top-speed cap creeps up past the limit
-                          //   (m/s²) — per-car: more power / less weight → faster
+  //   (m/s²) — per-car: more power / less weight → faster
 
   // Steering.
   maxSteer: number;      // radians at full lock
   steerRate: number;     // how fast steering approaches the target
-  highSpeedSteer: number; // 0..1 fraction of full lock retained at top speed
-                          //   (speed-sensitive steering; 1 = no reduction, lower =
-                          //   calmer/less twitchy at speed)
   turnSlowdown: number;  // 0..1, how much throttle eases off at full lock
   engineRate: number;    // how fast engine/reverse force ramps in (ref EngineRate)
 
@@ -57,14 +54,14 @@ export interface CarSpec {
   slipThreshold: number;   // m/s of lateral slip before the tire breaks loose
   kineticGripRatio: number; // 0..1 grip retained while sliding (ref ≈ 0.9)
   rearGripBias: number;     // <1 → rear axle breaks loose earlier than the front,
-                            //      giving progressive, catchable oversteer/drift
+  //      giving progressive, catchable oversteer/drift
   liftoffOversteer: number; // 0..1 how much lifting off the throttle mid-corner
-                            //      loosens the rear to tighten the turn (the trick)
+  //      loosens the rear to tighten the turn (the trick)
   liftoffYaw: number;       // low-speed turn assist (rad/s²): on throttle release
-                            //      the tail angles to help rotate the car when slow
+  //      the tail angles to help rotate the car when slow
   tailSlip: number;         // 0..1 how much the rear gives up grip while cornering
-                            //      at speed → a persistent, lively tail-out slip
-                            //      angle (the car's momentum resisting the turn)
+  //      at speed → a persistent, lively tail-out slip
+  //      angle (the car's momentum resisting the turn)
 
   // Cosmetic body lean (visual only — the physics body stays upright, never tips).
   leanStrength: number;     // radians of visible body roll per m/s of lateral slide
@@ -74,7 +71,9 @@ export interface CarSpec {
   // the tyres, so it shares grip with cornering and can lock up and skid.
   brakeBiasFront: number;  // 0..1 front share of the foot brake (real cars ~0.6)
   weightTransfer: number;  // grip shifted front↔rear under braking (nose dives,
-                           //   rear goes light) — keep modest, ~0.15..0.25
+  //   rear goes light) — keep modest, ~0.15..0.25
+  accelTransfer: number;   // grip shifted front↔rear under throttle (rear squats,
+  //   front goes light) — plants the rear on throttle
   brakeRamp: number;       // pedal pressure build-up/release rate (1/s)
   lockupAt: number;        // brake pressure (0..1) at which tyres start to skid
   lockupGrip: number;      // 0..1 grip retained by a fully locked (skidding) tyre
@@ -87,6 +86,16 @@ export interface CarSpec {
   suspensionRelaxation: number;
   frictionSlip: number;          // forward/overall grip
   sideFrictionStiffness: number; // lateral grip; higher grips harder (and can tip a tall car)
+
+  // --- Visual & Wheel Tuning (for .glb models) ---
+  visualScaleMultiplier?: number; // Shrink/grow the 3D model (e.g. 3.0, 4.0)
+  visualZOffset?: number;         // Slide the 3D model forward/backward (+/- meters)
+  visualYOffset?: number;         // Slide the 3D model up/down (+/- meters) to fix tire overlap
+  visualRotationY?: number;       // Rotate the 3D model on the Y axis (in radians)
+  wheelZInset?: number;           // How far wheels are inset from bumpers (default 0.25)
+  wheelZInsetFront?: number;      // Front axle distance from front bumper (overrides wheelZInset)
+  wheelZInsetRear?: number;       // Rear axle distance from rear bumper (overrides wheelZInset)
+  wheelXOffset?: number;          // Pushes wheels outward (+ value) for a wider track
 }
 
 /**
@@ -109,11 +118,11 @@ export const CARS: Record<string, CarSpec> = {
     driveBias: { front: 0.7, back: 0.9 }, // rear-leaning AWD → rotates instead of FWD-plowing wide
     topSpeed: 26, launchSpeed: 9, launchBoost: 0.3,
     overspeed: 0.2, overspeedAccel: 0.8, // climbs to +20% over the limit, then tops out
-    maxSteer: 0.55, steerRate: 4.5, highSpeedSteer: 0.5, turnSlowdown: 0.35, engineRate: 4.5,
+    maxSteer: 0.55, steerRate: 6.0, turnSlowdown: 0.15, engineRate: 4.5,
     slipThreshold: 3.8, kineticGripRatio: 0.78, // front bites longer before letting go
     rearGripBias: 0.75, liftoffOversteer: 0.35, liftoffYaw: 3.0, tailSlip: 0.15,
     leanStrength: 0.05, leanLowSpeedAmp: 2.0,
-    brakeBiasFront: 0.62, weightTransfer: 0.2, brakeRamp: 10, lockupAt: 0.85, lockupGrip: 0.2,
+    brakeBiasFront: 0.62, weightTransfer: 0.2, accelTransfer: 0.2, brakeRamp: 10, lockupAt: 0.85, lockupGrip: 0.2,
     suspensionRest: 0.3, suspensionStiffness: 45, suspensionTravel: 0.13,
     suspensionCompression: 2.2, suspensionRelaxation: 1.6,
     frictionSlip: 3.2, sideFrictionStiffness: 1.15, // more lateral bite → turns in, stops pushing wide
@@ -133,12 +142,12 @@ export const CARS: Record<string, CarSpec> = {
     driveBias: { front: 0.5, back: 1.0 }, // rear-biased → looser tail
     topSpeed: 32, launchSpeed: 10, launchBoost: 0.4,
     overspeed: 0.2, overspeedAccel: 1.0, // light & powerful → climbs fastest
-    maxSteer: 0.6, steerRate: 5.2, highSpeedSteer: 0.5, turnSlowdown: 0.3, engineRate: 5.5,
+    maxSteer: 0.6, steerRate: 6.5, turnSlowdown: 0.15, engineRate: 5.5,
     slipThreshold: 2.6, kineticGripRatio: 0.7, // breaks loose earliest, slides most
     rearGripBias: 0.6, liftoffOversteer: 0.5, liftoffYaw: 2.6, tailSlip: 0.28, // rear-biased → loosest tail
     leanStrength: 0.06, leanLowSpeedAmp: 2.2, // light & expressive → leans the most
     // lighter & twitchier: more dive, locks sooner, slides more when locked
-    brakeBiasFront: 0.58, weightTransfer: 0.24, brakeRamp: 12, lockupAt: 0.8, lockupGrip: 0.28,
+    brakeBiasFront: 0.58, weightTransfer: 0.24, accelTransfer: 0.25, brakeRamp: 12, lockupAt: 0.8, lockupGrip: 0.28,
     suspensionRest: 0.3, suspensionStiffness: 42, suspensionTravel: 0.13,
     suspensionCompression: 2.1, suspensionRelaxation: 1.5,
     frictionSlip: 2.8, sideFrictionStiffness: 1.0,
@@ -158,16 +167,81 @@ export const CARS: Record<string, CarSpec> = {
     driveBias: { front: 1.0, back: 1.0 }, // AWD
     topSpeed: 22, launchSpeed: 8, launchBoost: 0.25,
     overspeed: 0.2, overspeedAccel: 0.5, // heavy → climbs slowest toward +20%
-    maxSteer: 0.5, steerRate: 4.0, highSpeedSteer: 0.6, turnSlowdown: 0.4, engineRate: 4.0,
+    maxSteer: 0.5, steerRate: 5.5, turnSlowdown: 0.2, engineRate: 4.0,
     slipThreshold: 4.0, kineticGripRatio: 0.85, // planted, but now slides under provocation
     rearGripBias: 0.9, liftoffOversteer: 0.2, liftoffYaw: 1.2, tailSlip: 0.12, // planted → least tail slip
     leanStrength: 0.035, leanLowSpeedAmp: 1.6, // heavy → leans least
     // heavy & planted: little dive, very hard to lock, keeps grip when it does
-    brakeBiasFront: 0.66, weightTransfer: 0.16, brakeRamp: 8, lockupAt: 0.92, lockupGrip: 0.4,
+    brakeBiasFront: 0.66, weightTransfer: 0.16, accelTransfer: 0.15, brakeRamp: 8, lockupAt: 0.92, lockupGrip: 0.4,
     suspensionRest: 0.32, suspensionStiffness: 50, suspensionTravel: 0.12,
     suspensionCompression: 2.4, suspensionRelaxation: 1.7,
     frictionSlip: 3.6, sideFrictionStiffness: 0.85,
   },
+
+  // A new reliable, well-rounded Toyota build
+  toyota: {
+    name: "Toyota",
+    color: 0xdddddd,
+    halfWidth: 0.60, halfHeight: 0.28, halfLength: 1.1,
+    wheelRadius: 0.34, wheelWidth: 0.29,
+    mass: 4.2,
+    comOffset: { x: 0, y: -0.4, z: 0.05 },
+    inertia: { x: 1.6, y: 1.7, z: 1.7 },
+    linearDamping: 0.15, angularDamping: 0.9,
+    engineForce: 105, reverseForce: 35, maxBrake: 25, handbrake: 50,
+    driveBias: { front: 0.6, back: 0.4 }, // AWD for massive stability and launch
+    topSpeed: 48, launchSpeed: 14, launchBoost: 0.45,
+    overspeed: 0.25, overspeedAccel: 1.2,
+    maxSteer: 0.58, steerRate: 8.5, turnSlowdown: 0.08, engineRate: 6.5,
+    slipThreshold: 4.5, kineticGripRatio: 0.85,
+    rearGripBias: 0.92, liftoffOversteer: 0.1, liftoffYaw: 3.5, tailSlip: 0.25,
+    leanStrength: 0.045, leanLowSpeedAmp: 1.8,
+    brakeBiasFront: 0.65, weightTransfer: 0.25, accelTransfer: 0.15, brakeRamp: 12, lockupAt: 0.9, lockupGrip: 0.35,
+    suspensionRest: 0.35, suspensionStiffness: 85, suspensionTravel: 0.13,
+    suspensionCompression: 3.5, suspensionRelaxation: 2.8,
+    frictionSlip: 3.9, sideFrictionStiffness: 1.45,
+
+    // --- Tuning for the 3D Model ---
+    visualScaleMultiplier: 4.0,
+    visualZOffset: 0.0,
+    visualYOffset: 0.2,     // Raised higher to counteract suspension sag
+    wheelZInsetFront: -0.3, // Tweaks front wheels forward/back independently
+    wheelZInsetRear: -0.127,  // Tweaks rear wheels forward/back independently
+    wheelXOffset: 0.16,     // Makes the left/right wheels wider apart without changing physics chassis
+  },
+
+  // The new Ram build (identical physics/size to Toyota, per request)
+  ram: {
+    name: "Ram",
+    color: 0xdd4444, // Reddish color just to distinguish
+    halfWidth: 0.60, halfHeight: 0.28, halfLength: 1.1,
+    wheelRadius: 0.34, wheelWidth: 0.26,
+    mass: 2.2,
+    comOffset: { x: 0, y: -0.4, z: 0.05 },
+    inertia: { x: 1.6, y: 1.7, z: 1.7 },
+    linearDamping: 0.15, angularDamping: 0.9,
+    engineForce: 75, reverseForce: 35, maxBrake: 25, handbrake: 30,
+    driveBias: { front: 0.6, back: 0.4 },
+    topSpeed: 38, launchSpeed: 14, launchBoost: 0.45,
+    overspeed: 0.25, overspeedAccel: 1.2,
+    maxSteer: 0.58, steerRate: 8.5, turnSlowdown: 0.08, engineRate: 6.5,
+    slipThreshold: 4.5, kineticGripRatio: 0.85,
+    rearGripBias: 0.92, liftoffOversteer: 0.1, liftoffYaw: 1.5, tailSlip: 0.05,
+    leanStrength: 0.045, leanLowSpeedAmp: 1.8,
+    brakeBiasFront: 0.65, weightTransfer: 0.15, accelTransfer: 0.15, brakeRamp: 12, lockupAt: 0.9, lockupGrip: 0.35,
+    suspensionRest: 0.35, suspensionStiffness: 85, suspensionTravel: 0.13,
+    suspensionCompression: 3.5, suspensionRelaxation: 2.8,
+    frictionSlip: 3.9, sideFrictionStiffness: 1.45,
+
+    // --- Tuning for the 3D Model ---
+    visualScaleMultiplier: 4.0,
+    visualZOffset: 0.0,
+    visualYOffset: -0.2,     // Raises the chassis slightly so built-in tyres don't clip the ground
+    visualRotationY: Math.PI,
+    wheelZInsetFront: -0.12,
+    wheelZInsetRear: -0.39,
+    wheelXOffset: 0.16,
+  },
 };
 
-export const DEFAULT_CAR = "bolt";
+export const DEFAULT_CAR = "toyota";

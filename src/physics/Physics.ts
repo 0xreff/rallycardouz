@@ -46,4 +46,14 @@ export class Physics {
       this.accumulator -= Physics.FIXED_DT;
     }
   }
+
+  /**
+   * Interpolation alpha: how far (0..1) between the last completed physics
+   * step and the next one the current render frame sits. Use this to lerp
+   * visual positions between previous and current physics states so movement
+   * appears perfectly smooth regardless of framerate/timestep alignment.
+   */
+  get alpha(): number {
+    return this.accumulator / Physics.FIXED_DT;
+  }
 }

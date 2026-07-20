@@ -10,6 +10,9 @@ export interface ControlState {
   reset: boolean;
   recover: boolean;   // flip the car back onto its wheels in place
   cycleCar: boolean;  // switch to the next car in the roster
+  changeView: boolean; // cycle camera views
+  lookLeft: boolean;  // swing camera 45deg left
+  lookRight: boolean; // swing camera 45deg right
 }
 
 export class Input {
@@ -17,6 +20,7 @@ export class Input {
   private resetEdge = false;
   private recoverEdge = false;
   private cycleEdge = false;
+  private viewEdge = false;
 
   constructor() {
     window.addEventListener("keydown", (e) => {
@@ -54,6 +58,13 @@ export class Input {
     const cycleCar = cycleDown && !this.cycleEdge;
     this.cycleEdge = cycleDown;
 
-    return { throttle, brake, steer, handbrake: this.has(" "), reset, recover, cycleCar };
+    const viewDown = this.has("v");
+    const changeView = viewDown && !this.viewEdge;
+    this.viewEdge = viewDown;
+
+    const lookLeft = this.has("q");
+    const lookRight = this.has("e");
+
+    return { throttle, brake, steer, handbrake: this.has(" "), reset, recover, cycleCar, changeView, lookLeft, lookRight };
   }
 }

@@ -9,6 +9,7 @@ import { Dust } from "../engine/Dust";
 import { CarFX } from "./CarFX";
 import { SURFACES, SurfaceMap, type SurfaceProps } from "./Surfaces";
 import { nextImpact, creepTopEndCap, speedFraction as computeSpeedFraction } from "./handling";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CarSpec } from "./CarSpec";
 
 /**
@@ -61,7 +62,7 @@ export class Car {
   readonly body: RAPIER.RigidBody;
   readonly spec: CarSpec;
   private controller: RAPIER.DynamicRayCastVehicleController;
-  private chassisMesh: THREE.Mesh;
+  private chassisMesh: THREE.Object3D;
   private wheelMeshes: THREE.Mesh[] = [];
   private steer = 0;
   private appliedEngine = 0; // smoothed engine force (ref EngineRate ramp)
@@ -84,6 +85,47 @@ export class Car {
   private spawnPos: THREE.Vector3;
   private spawnRot: THREE.Quaternion;
 
+  // ---- Pre-allocated scratch objects (eliminates ~25 per-frame allocations) ----
+  private _velVec = new THREE.Vector3();
+  private _fwd = new THREE.Vector3();
+  private _right = new THREE.Vector3();
+  // update() self-right scratch
+  private _upVec = new THREE.Vector3();
+  private _worldUp = new THREE.Vector3(0, 1, 0);
+  private _crossVec = new THREE.Vector3();
+  private _wVec = new THREE.Vector3();
+  // stabilize() scratch
+  private _stabNormal = new THREE.Vector3();
+  private _stabUp = new THREE.Vector3();
+  private _stabAxis = new THREE.Vector3();
+  private _stabW = new THREE.Vector3();
+  private _stabNVec = new THREE.Vector3();
+  private _stabFwd = new THREE.Vector3();
+  private _stabRight = new THREE.Vector3();
+  private _stabCorrective = new THREE.Vector3();
+  // syncMeshes() scratch
+  private _chassisQuat = new THREE.Quaternion();
+  private _leanRoll = new THREE.Quaternion();
+  private _chassisMat = new THREE.Matrix4();
+  private _oneVec = new THREE.Vector3(1, 1, 1);
+  private _wheelWorld = new THREE.Vector3();
+  private _fxCp = new THREE.Vector3();
+  private _cnVec = new THREE.Vector3();
+  private _wheelQ = new THREE.Quaternion();
+  private _steerQ = new THREE.Quaternion();
+  private _rollQ = new THREE.Quaternion();
+  // speedFraction() scratch
+  private _speedFwd = new THREE.Vector3();
+  // recover() scratch
+  private _recoverQ = new THREE.Quaternion();
+  private _recoverEuler = new THREE.Euler();
+  // Reusable POJO for Rapier setLinvel / setAngvel (avoids { x, y, z } literals per frame)
+  private _rv3 = { x: 0, y: 0, z: 0 };
+  // ---- Physics interpolation: previous state for smooth rendering ----
+  private _prevPos = new THREE.Vector3();
+  private _prevRot = new THREE.Quaternion();
+  private _interpPos = new THREE.Vector3();
+
   constructor(
     physics: Physics,
     scene: THREE.Scene,
@@ -97,7 +139,7 @@ export class Car {
   ) {
     const R = physics.rapier;
     this.spec = spec;
-    this.fx = new CarFX(skids, sparks, smoke, dust);
+    this.fx = new CarFX(skids, sparks, smoke, dust, surfaces);
     this.physics = physics;
     this.topEndCap = spec.topSpeed; // starts at the limit, creeps up under sustained throttle
     this.spawnPos = spawn.clone();
@@ -134,12 +176,15 @@ export class Car {
     // Suspension hard-point near the chassis bottom so wheels hang below the
     // body (radius > halfHeight) instead of poking up through it.
     const connY = -spec.halfHeight + 0.04;
-    const connZ = spec.halfLength - 0.25;
+    const connZFront = spec.halfLength - (spec.wheelZInsetFront ?? spec.wheelZInset ?? 0.25);
+    const connZRear = spec.halfLength - (spec.wheelZInsetRear ?? spec.wheelZInset ?? 0.25);
+    const connX = spec.halfWidth + (spec.wheelXOffset ?? 0);
+    
     const wheelPositions = [
-      new R.Vector3(-spec.halfWidth, connY, connZ),   // FL
-      new R.Vector3(spec.halfWidth, connY, connZ),    // FR
-      new R.Vector3(-spec.halfWidth, connY, -connZ),  // BL
-      new R.Vector3(spec.halfWidth, connY, -connZ),   // BR
+      new R.Vector3(-connX, connY, connZFront),   // FL
+      new R.Vector3(connX, connY, connZFront),    // FR
+      new R.Vector3(-connX, connY, -connZRear),   // BL
+      new R.Vector3(connX, connY, -connZRear),    // BR
     ];
     const down = new R.Vector3(0, -1, 0);
     const axle = new R.Vector3(-1, 0, 0);
@@ -162,16 +207,110 @@ export class Car {
 
     const wheelGeo = new THREE.CylinderGeometry(spec.wheelRadius, spec.wheelRadius, spec.wheelWidth, 18);
     wheelGeo.rotateZ(Math.PI / 2); // align cylinder axis to local X (the axle)
-    const wheelMat = createRimMaterial({ color: 0x14151a, metalness: 0.1, roughness: 0.8, rimStrength: 0.18 });
+    const useDebug = spec.name === "Tank" || spec.name === "Toyota";
+    const wheelMat = useDebug 
+      ? new THREE.MeshBasicMaterial({ color: 0xff00aa, wireframe: true, transparent: true, opacity: 0.4 })
+      : createRimMaterial({ color: 0x14151a, metalness: 0.1, roughness: 0.8, rimStrength: 0.18 });
+      
     for (let i = 0; i < 4; i++) {
       const m = new THREE.Mesh(wheelGeo, wheelMat);
-      m.castShadow = true;
+      m.castShadow = !useDebug;
       scene.add(m);
       this.wheelMeshes.push(m);
     }
   }
 
-  private buildChassis(spec: CarSpec): THREE.Mesh {
+  private buildChassis(spec: CarSpec): THREE.Object3D {
+    if (spec.name === "Tank" || spec.name === "Toyota" || spec.name === "Ram") {
+      const root = new THREE.Group();
+      const loader = new GLTFLoader();
+      
+      let glbPath = '/assets/d01c4c8e1685f8a60e41844cdde58a22.glb';
+      if (spec.name === "Toyota") glbPath = '/assets/toyota.glb';
+      else if (spec.name === "Ram") glbPath = '/assets/ram.glb';
+
+      loader.load(glbPath, (gltf) => {
+        const model = gltf.scene;
+
+        // Calculate current bounding box
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+
+        // Target size based on spec length, assuming typical car proportions
+        // (chassis + some bumper/tire overhang).
+        // Increase this multiplier (e.g. to 3.0 or 3.5) if the 3D model's tires
+        // are too close together compared to the pink physics tires.
+        // Decrease it (e.g. to 2.5) if they are too far apart.
+        let modelMultiplier = spec.visualScaleMultiplier ?? 3.0; 
+        if (!spec.visualScaleMultiplier && spec.name === "Toyota") {
+          modelMultiplier = 4.0; 
+        }
+        
+        const targetLength = spec.halfLength * modelMultiplier; 
+        
+        // Scale proportionally based on length
+        const scale = targetLength / size.z;
+        
+        model.scale.setScalar(scale);
+
+        // Re-calculate box after scaling to center it properly
+        box.setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        
+        // Offset model so its center aligns with the root (0,0,0)
+        model.position.sub(center);
+        
+        // Apply visual rotation if defined
+        if (spec.visualRotationY) {
+          model.rotation.y = spec.visualRotationY;
+        }
+
+        // Ground alignment: push the car down so the visual tires hit the physics floor
+        const connY = -spec.halfHeight + 0.04;
+        const physicsBottom = connY - spec.suspensionRest - spec.wheelRadius;
+        const visualBottom = - (size.y * scale) / 2;
+        model.position.y += (physicsBottom - visualBottom) + (spec.visualYOffset ?? 0);
+
+        // Slide the model forward/backward if it doesn't align with the physics wheelbase
+        model.position.z += (spec.visualZOffset ?? 0);
+
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            const mesh = child as THREE.Mesh;
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            
+            // Convert GLB materials to our custom RimMaterial so they get the cool edge glow
+            // and don't look like flat black plastic due to the lack of an environment map!
+            if (mesh.material) {
+              const oldMat = mesh.material as THREE.MeshStandardMaterial;
+              if (oldMat.isMeshStandardMaterial) {
+                const newMat = createRimMaterial({
+                  color: oldMat.color,
+                  metalness: 0.15, // Low metalness so textures/colors remain visible without an HDRI
+                  roughness: 0.6,
+                });
+                newMat.map = oldMat.map;
+                newMat.normalMap = oldMat.normalMap;
+                newMat.roughnessMap = oldMat.roughnessMap;
+                newMat.metalnessMap = oldMat.metalnessMap;
+                mesh.material = newMat;
+              }
+            }
+          }
+        });
+        root.add(model);
+      }, undefined, (error) => {
+        console.error(`Failed to load ${glbPath}:`, error);
+        root.add(this.buildProceduralChassis(spec));
+      });
+      return root;
+    }
+
+    return this.buildProceduralChassis(spec);
+  }
+
+  private buildProceduralChassis(spec: CarSpec): THREE.Object3D {
     const bodyMat = createRimMaterial({ color: spec.color, metalness: 0.45, roughness: 0.4 });
     const root = new THREE.Mesh(
       new THREE.BoxGeometry(spec.halfWidth * 2, spec.halfHeight * 2, spec.halfLength * 2),
@@ -218,9 +357,9 @@ export class Car {
 
     // Velocity decomposed into the car's own axes.
     const vel = this.body.linvel();
-    const velVec = new THREE.Vector3(vel.x, vel.y, vel.z);
-    const fwd = this.forwardVector();
-    const right = this.rightVector();
+    const velVec = this._velVec.set(vel.x, vel.y, vel.z);
+    const fwd = this.forwardVector(this._fwd);
+    const right = this.rightVector(this._right);
     const speed = velVec.dot(fwd);             // forward speed (signed)
     const lateralSpeed = Math.abs(velVec.dot(right)); // sideways slip speed
 
@@ -256,11 +395,7 @@ export class Car {
     const coasting = controls.throttle === 0 && !handbraking && controls.brake === 0;
     const speedFrac = THREE.MathUtils.clamp(Math.abs(speed) / spec.topSpeed, 0, 1);
 
-    // Speed-sensitive steering: full lock when slow (for tight manoeuvres), easing
-    // toward `highSpeedSteer` of lock at top speed so fast curves aren't twitchy.
-    // Negated so D/→ turns right; smoothed toward the target by `steerRate`.
-    const steerScale = THREE.MathUtils.lerp(1, spec.highSpeedSteer, speedFrac);
-    const steerTarget = -controls.steer * spec.maxSteer * steerScale;
+    const steerTarget = -controls.steer * spec.maxSteer;
     this.steer += (steerTarget - this.steer) * Math.min(1, spec.steerRate * dt);
     for (const i of FRONT) this.controller.setWheelSteering(i, this.steer);
 
@@ -277,7 +412,8 @@ export class Car {
       const av = this.body.angvel();
       let y = av.y + controls.steer * spec.liftoffYaw * (1 - speedFrac) * dt;
       y = THREE.MathUtils.clamp(y, -MAX_ASSIST_YAW, MAX_ASSIST_YAW);
-      this.body.setAngvel({ x: av.x, y, z: av.z }, true);
+      const rv = this._rv3; rv.x = av.x; rv.y = y; rv.z = av.z;
+      this.body.setAngvel(rv, true);
     }
 
     // Cosmetic body roll: the chassis visibly leans with the slide so you can see
@@ -293,18 +429,17 @@ export class Car {
     // onto its wheels — rock it upright with the throttle instead of waiting for F.
     {
       const rot = this.body.rotation();
-      const upVec = new THREE.Vector3(0, 1, 0).applyQuaternion(new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w));
+      const upVec = this._upVec.set(0, 1, 0).applyQuaternion(this.rotScratch.set(rot.x, rot.y, rot.z, rot.w));
       const driving = controls.throttle > 0 || controls.brake > 0;
       if (upVec.y < 0.5 && driving) {
-        // Roll direction (about the forward axis) that brings the car's up toward
-        // world up; if it's almost perfectly upside-down, pick a side to start.
-        let rollDir = Math.sign(new THREE.Vector3().crossVectors(upVec, new THREE.Vector3(0, 1, 0)).dot(fwd));
+        let rollDir = Math.sign(this._crossVec.crossVectors(upVec, this._worldUp.set(0, 1, 0)).dot(fwd));
         if (Math.abs(rollDir) < 0.01) rollDir = 1;
         const av = this.body.angvel();
-        const w = new THREE.Vector3(av.x, av.y, av.z);
+        const w = this._wVec.set(av.x, av.y, av.z);
         const curRoll = w.dot(fwd);
         w.addScaledVector(fwd, (rollDir * RIGHTING_RATE - curRoll) * Math.min(1, 6 * dt));
-        this.body.setAngvel({ x: w.x, y: w.y, z: w.z }, true);
+        const rv2 = this._rv3; rv2.x = w.x; rv2.y = w.y; rv2.z = w.z;
+        this.body.setAngvel(rv2, true);
       }
     }
 
@@ -347,9 +482,9 @@ export class Car {
     const frontBrakeShare = handbraking ? 0 : spec.brakeBiasFront;
     const rearBrakeShare = handbraking ? 1 : 1 - spec.brakeBiasFront;
 
-    // (2) Weight transfer: braking pitches load onto the nose — the front grips
-    //     harder, the rear goes light (and is far easier to step out).
-    const transfer = spec.weightTransfer * pressure;
+    // (2) Weight transfer: braking pitches load onto the nose (front gains, rear loses).
+    //     Acceleration shifts load to the rear (rear gains, front loses).
+    const transfer = spec.weightTransfer * pressure - spec.accelTransfer * controls.throttle;
 
     // (3) Lockup: past `lockupAt` pressure the tyres start to skid. `overbrake` is
     //     how far past (0..1); the rear locks more readily because it's now light.
@@ -382,11 +517,12 @@ export class Car {
     // releasing the throttle while turning rotates the car harder into the corner
     frontSide *= 1 + 0.3 * liftoff;
     backSide *= 1 - liftoff;
-    // persistent tail-out slip → turning at speed always bleeds a little rear grip,
-    // so every car carries a slip angle: the tail tends out and the car's momentum
-    // visibly resists the turn (a lively slide instead of on-rails grip).
+    // persistent tail-out slip → turning at speed bleeds a little rear grip.
+    // Gated by throttle: the tail steps out when coasting, but throttle plants it
+    // (up to ~70% suppression) so power-on cornering is stable, not loose.
     const cornerDemand = Math.abs(controls.steer) * speedFrac;
-    backSide *= 1 - spec.tailSlip * cornerDemand;
+    const tailSlipFactor = spec.tailSlip * (1 - 0.7 * controls.throttle);
+    backSide *= 1 - tailSlipFactor * cornerDemand;
     // surface grip → loose ground (dirt) cuts lateral grip per axle (tarmac = 1):
     // the car bites on the road, runs wide and drifts easily on the terrain.
     frontSide *= (this.wheelSurface[0].grip + this.wheelSurface[1].grip) * 0.5;
@@ -461,14 +597,16 @@ export class Car {
       const sp = Math.hypot(v.x, v.z);
       if (sp > 1e-3) {
         const f = Math.max(0, sp - decel * dt) / sp;
-        this.body.setLinvel({ x: v.x * f, y: v.y, z: v.z * f }, true);
+        const rv = this._rv3; rv.x = v.x * f; rv.y = v.y; rv.z = v.z * f;
+        this.body.setLinvel(rv, true);
       }
       // Very light yaw damp keeps a straight stop from wandering, but it's gentle
       // and backs right off once the rear is sliding so the tail can swing and
       // trail the motion under braking (weighty skid, not an on-rails stop).
       const av = this.body.angvel();
       const yk = Math.min(1, 1.3 * dt) * (1 - rearLock);
-      this.body.setAngvel({ x: av.x, y: av.y * (1 - yk), z: av.z }, true);
+      const rv3 = this._rv3; rv3.x = av.x; rv3.y = av.y * (1 - yk); rv3.z = av.z;
+      this.body.setAngvel(rv3, true);
     }
 
     // Burnout hold: with throttle AND brake/handbrake held, the brakes overpower the
@@ -476,7 +614,8 @@ export class Car {
     // (it barely creeps) while the wheels spin and smoke. Release the brake to launch.
     if (burnout && grounded > 0) {
       const v = this.body.linvel();
-      this.body.setLinvel({ x: v.x * 0.5, y: v.y, z: v.z * 0.5 }, true);
+      const rv4 = this._rv3; rv4.x = v.x * 0.5; rv4.y = v.y; rv4.z = v.z * 0.5;
+      this.body.setLinvel(rv4, true);
     }
 
     // Stabilize: under braking the nose may dip, but only subtly — pitch stays
@@ -494,23 +633,23 @@ export class Car {
    * surface normal (not world up) means it sits correctly on slopes/ramps too.
    */
   private stabilize(dt: number, pitchGain: number) {
-    const normal = new THREE.Vector3();
+    const normal = this._stabNormal.set(0, 0, 0);
     let grounded = 0;
     for (let i = 0; i < 4; i++) {
       if (this.controller.wheelIsInContact(i)) {
         grounded++;
         const n = this.controller.wheelContactNormal(i);
-        if (n) normal.add(new THREE.Vector3(n.x, n.y, n.z));
+        if (n) normal.add(this._stabNVec.set(n.x, n.y, n.z));
       }
     }
     if (grounded === 0 || normal.lengthSq() < 1e-6) return; // airborne → free
     normal.normalize();
 
     const r = this.body.rotation();
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(new THREE.Quaternion(r.x, r.y, r.z, r.w));
+    const up = this._stabUp.set(0, 1, 0).applyQuaternion(this.rotScratch.set(r.x, r.y, r.z, r.w));
 
     // Axis/angle that rotates the car's up-vector onto the surface normal.
-    const axis = new THREE.Vector3().crossVectors(up, normal);
+    const axis = this._stabAxis.crossVectors(up, normal);
     const sin = axis.length();
     if (sin < 1e-5) return;
     axis.divideScalar(sin);
@@ -518,43 +657,71 @@ export class Car {
 
     // PD controller: spring toward level, damp the current tilt rate.
     const av = this.body.angvel();
-    const w = new THREE.Vector3(av.x, av.y, av.z);
+    const w = this._stabW.set(av.x, av.y, av.z);
     const tiltRate = w.dot(axis);
     const accelMag = (UPRIGHT_STIFFNESS * angle - UPRIGHT_DAMPING * tiltRate) * (grounded / 4);
-    let corrective = axis.multiplyScalar(accelMag);
+    // axis is now the corrective direction (multiplied in-place)
+    axis.multiplyScalar(accelMag);
 
     // Split the correction into roll (about the car's forward axis) and pitch
     // (about its right axis). Roll stays full so it can't tip onto its side;
     // pitch is scaled by pitchGain so the nose may dip under braking.
-    const fwd = this.forwardVector();
-    const right = this.rightVector();
-    corrective = fwd
-      .multiplyScalar(corrective.dot(fwd))
-      .add(right.multiplyScalar(corrective.dot(right) * pitchGain));
+    const fwd = this.forwardVector(this._stabFwd);
+    const right = this.rightVector(this._stabRight);
+    const rollComp = axis.dot(fwd);
+    const pitchComp = axis.dot(right) * pitchGain;
+    const corrective = this._stabCorrective;
+    corrective.copy(fwd).multiplyScalar(rollComp).addScaledVector(right, pitchComp);
 
     w.addScaledVector(corrective, dt);
-    this.body.setAngvel({ x: w.x, y: w.y, z: w.z }, true);
+    const rv = this._rv3; rv.x = w.x; rv.y = w.y; rv.z = w.z;
+    this.body.setAngvel(rv, true);
   }
 
-  /** Sync Three.js meshes to the physics state. Call once per render frame. */
-  syncMeshes() {
+  /**
+   * Snapshot the current physics state so syncMeshes() can interpolate between
+   * this (previous) state and the post-step (current) state. Call ONCE per
+   * frame, BEFORE physics.step().
+   */
+  savePreviousState() {
     const t = this.body.translation();
     const r = this.body.rotation();
-    const chassisQuat = new THREE.Quaternion(r.x, r.y, r.z, r.w);
-    this.chassisMesh.position.set(t.x, t.y, t.z);
+    this._prevPos.set(t.x, t.y, t.z);
+    this._prevRot.set(r.x, r.y, r.z, r.w);
+  }
+
+  /**
+   * Sync Three.js meshes to the physics state. When `alpha` (0..1) is given,
+   * the visual position is interpolated between the previous and current
+   * physics state — this eliminates the micro-stutter caused by the fixed
+   * 60 Hz physics stepping against a variable-rate display.
+   */
+  syncMeshes(alpha = 1) {
+    const t = this.body.translation();
+    const r = this.body.rotation();
+
+    // Interpolated position & rotation for smooth rendering.
+    const curPos = this._interpPos.set(t.x, t.y, t.z);
+    const curRot = this._chassisQuat.set(r.x, r.y, r.z, r.w);
+    if (alpha < 1) {
+      curPos.lerpVectors(this._prevPos, curPos, alpha);
+      curRot.slerpQuaternions(this._prevRot, curRot, alpha);
+    }
+
+    this.chassisMesh.position.copy(curPos);
     // Add the cosmetic lean as an extra roll about the car's forward axis. The
     // wheels (below) use the un-leaned chassisQuat so they stay on the ground.
-    const leanRoll = new THREE.Quaternion().setFromAxisAngle(Z_AXIS, this.visualLean);
-    this.chassisMesh.quaternion.copy(chassisQuat).multiply(leanRoll);
+    const leanRoll = this._leanRoll.setFromAxisAngle(Z_AXIS, this.visualLean);
+    this.chassisMesh.quaternion.copy(curRot).multiply(leanRoll);
 
-    const chassisMat = new THREE.Matrix4().compose(
+    const chassisMat = this._chassisMat.compose(
       this.chassisMesh.position,
-      chassisQuat,
-      new THREE.Vector3(1, 1, 1)
+      curRot,
+      this._oneVec.set(1, 1, 1)
     );
 
     // Flat heading, used to orient a burnout scrub patch when stationary.
-    const fwdH = this.forwardVector();
+    const fwdH = this.forwardVector(this._fwd);
     const heading = Math.atan2(fwdH.x, fwdH.z);
     const lv = this.body.linvel(); // for skid-mark orientation (constant this frame)
 
@@ -564,53 +731,48 @@ export class Car {
       // driven wheels carry an extra spin offset so they whirl during a burnout
       const roll = (this.controller.wheelRotation(i) ?? 0) + (driven ? this.burnoutSpin : 0);
 
-      // Place the wheel centre exactly one radius above the real contact point
-      // (along the surface normal) so it never sinks into the floor. Only when
-      // airborne do we fall back to the suspension-length estimate.
-      let world: THREE.Vector3;
+      // Calculate wheel center purely from chassis matrix and suspension length
+      // so it stays perfectly synced with the chassis without a 1-frame delay.
+      const conn = this.controller.wheelChassisConnectionPointCs(i)!;
+      const susp = this.controller.wheelSuspensionLength(i) ?? this.spec.suspensionRest;
+      const world = this._wheelWorld.set(conn.x, conn.y - susp, conn.z).applyMatrix4(chassisMat);
+
       if (this.controller.wheelIsInContact(i)) {
-        const cp = this.controller.wheelContactPoint(i)!;
         const cn = this.controller.wheelContactNormal(i)!;
-        world = new THREE.Vector3(cp.x, cp.y, cp.z).addScaledVector(
-          new THREE.Vector3(cn.x, cn.y, cn.z),
-          this.spec.wheelRadius
-        );
+        // Reconstruct the ground contact point from the synced wheel position
+        const fxCp = this._fxCp.copy(world).addScaledVector(this._cnVec.set(cn.x, cn.y, cn.z), -this.spec.wheelRadius);
         // Skid mark + tyre smoke / surface dust at the ground contact (see CarFX).
-        this.fx.wheelContact(cp, this.wheelSmoke[i], this.wheelSkid[i], this.burningOut, lv.x, lv.z, heading, this.spec.wheelWidth, this.wheelDust[i]);
-      } else {
-        const conn = this.controller.wheelChassisConnectionPointCs(i)!;
-        const susp = this.controller.wheelSuspensionLength(i) ?? this.spec.suspensionRest;
-        world = new THREE.Vector3(conn.x, conn.y - susp, conn.z).applyMatrix4(chassisMat);
+        this.fx.wheelContact(fxCp, this.wheelSmoke[i], this.wheelSkid[i], this.burningOut, lv.x, lv.z, heading, this.spec.wheelWidth, this.wheelDust[i]);
       }
 
-      const q = new THREE.Quaternion()
-        .multiply(chassisQuat)
-        .multiply(new THREE.Quaternion().setFromAxisAngle(Y_AXIS, steer))
-        .multiply(new THREE.Quaternion().setFromAxisAngle(X_AXIS, roll));
+      const q = this._wheelQ.identity()
+        .multiply(curRot)
+        .multiply(this._steerQ.setFromAxisAngle(Y_AXIS, steer))
+        .multiply(this._rollQ.setFromAxisAngle(X_AXIS, roll));
 
       this.wheelMeshes[i].position.copy(world);
       this.wheelMeshes[i].quaternion.copy(q);
     }
   }
 
-  forwardVector(): THREE.Vector3 {
+  forwardVector(out?: THREE.Vector3): THREE.Vector3 {
     const r = this.body.rotation();
-    return new THREE.Vector3(0, 0, 1).applyQuaternion(this.rotScratch.set(r.x, r.y, r.z, r.w));
+    return (out ?? new THREE.Vector3()).set(0, 0, 1).applyQuaternion(this.rotScratch.set(r.x, r.y, r.z, r.w));
   }
 
-  rightVector(): THREE.Vector3 {
+  rightVector(out?: THREE.Vector3): THREE.Vector3 {
     const r = this.body.rotation();
-    return new THREE.Vector3(1, 0, 0).applyQuaternion(this.rotScratch.set(r.x, r.y, r.z, r.w));
+    return (out ?? new THREE.Vector3()).set(1, 0, 0).applyQuaternion(this.rotScratch.set(r.x, r.y, r.z, r.w));
   }
 
-  position(): THREE.Vector3 {
+  position(out?: THREE.Vector3): THREE.Vector3 {
     const t = this.body.translation();
-    return new THREE.Vector3(t.x, t.y, t.z);
+    return (out ?? new THREE.Vector3()).set(t.x, t.y, t.z);
   }
 
-  velocity(): THREE.Vector3 {
+  velocity(out?: THREE.Vector3): THREE.Vector3 {
     const v = this.body.linvel();
-    return new THREE.Vector3(v.x, v.y, v.z);
+    return (out ?? new THREE.Vector3()).set(v.x, v.y, v.z);
   }
 
   /** True when no wheel is touching the ground (jumping / flying off a ramp). */
@@ -622,7 +784,7 @@ export class Car {
   /** Forward speed as a fraction (0..1) of this car's true top speed (incl. overspeed). */
   speedFraction(): number {
     const v = this.body.linvel();
-    const f = this.forwardVector();
+    const f = this.forwardVector(this._speedFwd);
     const s = f.x * v.x + f.y * v.y + f.z * v.z;
     return computeSpeedFraction(s, this.spec.topSpeed, this.spec.overspeed);
   }
@@ -650,20 +812,25 @@ export class Car {
 
   /** Remove all meshes and physics objects for this car (used when swapping cars). */
   dispose(scene: THREE.Scene, physics: Physics) {
-    const disposeMesh = (m: THREE.Mesh) => {
-      scene.remove(m);
-      m.geometry.dispose();
-      const mat = m.material;
-      if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
-      else mat.dispose();
+    const disposeObject = (m: THREE.Object3D) => {
+      if (m instanceof THREE.Mesh) {
+        m.geometry?.dispose();
+        if (m.material) {
+          if (Array.isArray(m.material)) m.material.forEach((mat) => mat.dispose());
+          else m.material.dispose();
+        }
+      }
     };
-    // Chassis has a child cabin mesh; dispose it too.
-    this.chassisMesh.children.forEach((c) => {
-      if (c instanceof THREE.Mesh) disposeMesh(c);
-    });
-    disposeMesh(this.chassisMesh);
+    
+    // Recursively dispose all children of the chassis
+    this.chassisMesh.traverse(disposeObject);
+    scene.remove(this.chassisMesh);
+
     // Wheels share one geometry/material — disposing each handle is safe.
-    this.wheelMeshes.forEach(disposeMesh);
+    this.wheelMeshes.forEach((m) => {
+      scene.remove(m);
+      disposeObject(m);
+    });
 
     physics.world.removeVehicleController(this.controller);
     physics.world.removeRigidBody(this.body); // also removes attached colliders
@@ -672,8 +839,8 @@ export class Car {
   /** True when the car has rolled past ~66° from upright. */
   isFlipped(): boolean {
     const r = this.body.rotation();
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(new THREE.Quaternion(r.x, r.y, r.z, r.w));
-    return up.y < 0.4;
+    const upY = this._upVec.set(0, 1, 0).applyQuaternion(this.rotScratch.set(r.x, r.y, r.z, r.w)).y;
+    return upY < 0.4;
   }
 
   /**
@@ -683,9 +850,9 @@ export class Car {
   recover() {
     if (!this.isFlipped()) return;
 
-    const fwd = this.forwardVector();
+    const fwd = this.forwardVector(this._fwd);
     const yaw = Math.atan2(fwd.x, fwd.z);
-    const upright = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, 0));
+    const upright = this._recoverQ.setFromEuler(this._recoverEuler.set(0, yaw, 0));
 
     const t = this.body.translation();
     this.body.setTranslation({ x: t.x, y: t.y + 0.6, z: t.z }, true);

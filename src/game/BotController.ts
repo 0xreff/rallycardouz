@@ -22,11 +22,24 @@ export class BotController {
   private stuckTime = 0;    // how long we've been barely moving
   private reverseTimer = 0; // >0 while backing out of being stuck
   private reverseDir = 1;
+  private _rayDir = new THREE.Vector3();
+  private _ray: any = null; // RAPIER.Ray
 
   constructor(private physics: Physics, private car: Car) {}
 
   sample(dt: number): ControlState {
-    const idle = { throttle: 0, brake: 0, steer: 0, handbrake: false, reset: false, recover: false, cycleCar: false };
+    const idle = {
+      throttle: 0,
+      brake: 0,
+      steer: 0,
+      handbrake: false,
+      reset: false,
+      recover: false,
+      cycleCar: false,
+      changeView: false,
+      lookLeft: false,
+      lookRight: false,
+    };
 
     const pos = this.car.position();
     const fwd = this.car.forwardVector();
@@ -73,8 +86,21 @@ export class BotController {
 
   /** Distance to the nearest obstacle along `dir` (normalised), or `look` if clear. */
   private cast(origin: THREE.Vector3, dir: THREE.Vector3, look: number): number {
-    const ray = new this.physics.rapier.Ray(origin, dir.clone().normalize());
-    const hit = this.physics.world.castRay(ray, look, true, undefined, undefined, undefined, this.car.body);
+    this._rayDir.copy(dir).normalize();
+    if (!this._ray) {
+      this._ray = new this.physics.rapier.Ray(
+        { x: origin.x, y: origin.y, z: origin.z },
+        { x: this._rayDir.x, y: this._rayDir.y, z: this._rayDir.z }
+      );
+    } else {
+      this._ray.origin.x = origin.x;
+      this._ray.origin.y = origin.y;
+      this._ray.origin.z = origin.z;
+      this._ray.dir.x = this._rayDir.x;
+      this._ray.dir.y = this._rayDir.y;
+      this._ray.dir.z = this._rayDir.z;
+    }
+    const hit = this.physics.world.castRay(this._ray, look, true, undefined, undefined, undefined, this.car.body);
     return hit ? hit.timeOfImpact : look;
   }
 }

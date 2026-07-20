@@ -1,7 +1,10 @@
 import { Physics } from "./physics/Physics";
 import { Game } from "./game/Game";
+import { injectSpeedInsights } from "@vercel/speed-insights";
 
 async function boot() {
+  // Initialize Vercel Speed Insights
+  injectSpeedInsights();
   const container = document.getElementById("app")!;
   const loader = document.getElementById("loader")!;
 

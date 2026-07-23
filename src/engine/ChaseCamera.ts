@@ -36,15 +36,18 @@ export class ChaseCamera {
   private landingDip = 0;      // transient on landing: sinks the cam & flattens the look
   private chaseHeading = new THREE.Vector3(0, 0, 1); // smoothed forward direction
 
-  // Camera modes: [Close, Standard, Far]
+  // Camera modes: [Close, Standard, Far, Above Chassis, Hood, FPP]
   private modes = [
-    { distance: 5.5, height: 1.25 },
-    { distance: 7.5, height: 1.7 },
-    { distance: 10, height: 2.0 }
+    { distance: 5.5, height: 1.25 }, // Close
+    { distance: 7.5, height: 1.7 },  // Standard
+    { distance: 10, height: 2.0 },   // Far
+    { distance: 1.5, height: 2.0 },  // Above Chassis
+    { distance: -1.5, height: 1.0 }, // Hood
+    { distance: -0.2, height: 0.9 }  // FPP
   ];
-  private modeIndex = 1;
-  private currentDistance = this.modes[1].distance;
-  private currentHeight = this.modes[1].height;
+  private modeIndex = 0;
+  private currentDistance = this.modes[0].distance;
+  private currentHeight = this.modes[0].height;
 
   // Pre-allocated scratch objects — eliminates ~10 per-frame allocations.
   private _targetHeading = new THREE.Vector3();
@@ -156,7 +159,7 @@ export class ChaseCamera {
 
     // --- Distance & height: pull back/up with speed, more in the air; accel shoves
     //     the camera back, braking draws it in. ---
-    let dist = this.currentDistance + t.speedFrac * 0.1 + THREE.MathUtils.clamp(this.smAccel * 0.02, -0.7, 1.0);
+    let dist = this.currentDistance + t.speedFrac * 0.02 + THREE.MathUtils.clamp(this.smAccel * 0.01, -0.2, 0.4);
     let height = this.currentHeight - t.speedFrac * 0.2; // sit lower at speed → flatter, more horizontal view
     if (t.airborne) {
       dist += 1.0;
@@ -169,7 +172,11 @@ export class ChaseCamera {
       .addScaledVector(offsetFwd, -dist);
     desired.y += height;
     // ease sideways opposite the slide so we see into the drift
-    desired.addScaledVector(t.right, -THREE.MathUtils.clamp(lateralVel * 0.06, -1.2, 1.2));
+    // Reduce lateral shift for closer cameras (like FPP, Hood) to avoid clipping out of the car
+    const isInsideOrClose = this.currentDistance < 2.0;
+    const lateralShiftMap = isInsideOrClose ? 0.01 : 0.06;
+    const lateralShiftMax = isInsideOrClose ? 0.2 : 1.2;
+    desired.addScaledVector(t.right, -THREE.MathUtils.clamp(lateralVel * lateralShiftMap, -lateralShiftMax, lateralShiftMax));
 
     // Floatier follow in the air, snappy on the ground.
     this.currentPos.lerp(desired, k(t.airborne ? 0.02 : 0.0016));

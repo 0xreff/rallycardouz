@@ -1,0 +1,55 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+
+stages:
+  - test
+  - build
+  - deploy
+
+default:
+  image: node:22-bookworm-slim
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
+  before_script:
+    - npm ci --cache .npm --prefer-offline
+
+test:
+  stage: test
+  script:
+    - npm test
+
+build:
+  stage: build
+  script:
+    - npm run build
+    - test -s dist/index.html
+    - |
+      for model in public/assets/*.glb; do
+        test -s "dist/assets/$(basename "$model")" || exit 1
+      done
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+
+deploy-pages:
+  stage: deploy
+  needs:
+    - job: build
+      artifacts: true
+  cache: []
+  before_script: []
+  script:
+    - test -s dist/index.html
+  pages:
+    publish: dist
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

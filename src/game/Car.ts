@@ -225,9 +225,10 @@ export class Car {
       const root = new THREE.Group();
       const loader = new GLTFLoader();
 
-      let glbPath = '/assets/d01c4c8e1685f8a60e41844cdde58a22.glb';
-      if (spec.name === "Toyota") glbPath = '/assets/toyota.glb';
-      else if (spec.name === "Ram") glbPath = '/assets/ram.glb';
+      const assetBase = `${import.meta.env.BASE_URL}assets/`;
+      let glbPath = `${assetBase}d01c4c8e1685f8a60e41844cdde58a22.glb`;
+      if (spec.name === "Toyota") glbPath = `${assetBase}toyota.glb`;
+      else if (spec.name === "Ram") glbPath = `${assetBase}ram.glb`;
 
       loader.load(glbPath, (gltf) => {
         const model = gltf.scene;

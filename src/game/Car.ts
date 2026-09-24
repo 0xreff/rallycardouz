@@ -8,7 +8,7 @@ import { Smoke } from "../engine/Smoke";
 import { Dust } from "../engine/Dust";
 import { CarFX } from "./CarFX";
 import { SURFACES, SurfaceMap, type SurfaceProps } from "./Surfaces";
-import { nextImpact, creepTopEndCap, speedFraction as computeSpeedFraction } from "./handling";
+import { nextImpact, creepTopEndCap, speedFraction as computeSpeedFraction, shouldHoldHandbrake } from "./handling";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CarSpec } from "./CarSpec";
 
@@ -623,6 +623,29 @@ export class Car {
     // fairly firm so it never lurches — while roll is fully locked (can't tip).
     const pitchGain = THREE.MathUtils.lerp(1.0, 0.6, pressure);
     this.stabilize(dt, pitchGain);
+
+    // A locked rear axle deliberately leaves yaw free during a slide. Once the
+    // car has nearly settled, remove residual creep/yaw instead of letting it
+    // circulate forever. Keep vertical motion and suspension tilt untouched.
+    const heldVelocity = this.body.linvel();
+    const heldAngular = this.body.angvel();
+    if (shouldHoldHandbrake(
+      handbraking, controls.throttle, grounded,
+      Math.hypot(heldVelocity.x, heldVelocity.z), heldAngular.y
+    )) {
+      const rv = this._rv3;
+      rv.x = 0; rv.y = heldVelocity.y; rv.z = 0;
+      this.body.setLinvel(rv, true);
+      rv.x = heldAngular.x; rv.y = 0; rv.z = heldAngular.z;
+      this.body.setAngvel(rv, true);
+      this.appliedEngine = 0; // no lingering smoothed drive on the next substep
+      for (let i = 0; i < 4; i++) {
+        this.controller.setWheelEngineForce(i, 0);
+        this.wheelSkid[i] = false;
+        this.wheelSmoke[i] = 0;
+        this.wheelDust[i] = 0;
+      }
+    }
   }
 
   /**

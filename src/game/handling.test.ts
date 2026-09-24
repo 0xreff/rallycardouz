@@ -1,5 +1,32 @@
 import { describe, it, expect } from "vitest";
-import { clamp, nextImpact, creepTopEndCap, speedFraction, avoidanceControl } from "./handling";
+import { clamp, nextImpact, creepTopEndCap, speedFraction, avoidanceControl, shouldHoldHandbrake } from "./handling";
+
+describe("shouldHoldHandbrake", () => {
+  it.each([0, 0.0005, 0.1, 0.15])("holds residual horizontal speed %s", (speed) => {
+    expect(shouldHoldHandbrake(true, 0, 4, speed, 0.01)).toBe(true);
+  });
+
+  it.each([-0.15, 0, 0.15])("holds small yaw rates in either direction: %s", (yaw) => {
+    expect(shouldHoldHandbrake(true, 0, 2, 0, yaw)).toBe(true);
+  });
+
+  it("releases immediately with Space released or throttle applied", () => {
+    expect(shouldHoldHandbrake(false, 0, 4, 0, 0)).toBe(false);
+    expect(shouldHoldHandbrake(true, 0.01, 4, 0, 0)).toBe(false);
+    expect(shouldHoldHandbrake(true, 1, 4, 0, 0)).toBe(false);
+  });
+
+  it.each([0, 1])("does not hold with only %s wheel contacts", (contacts) => {
+    expect(shouldHoldHandbrake(true, 0, contacts, 0, 0)).toBe(false);
+  });
+
+  it("preserves moving slides and spins", () => {
+    expect(shouldHoldHandbrake(true, 0, 4, 0.151, 0)).toBe(false);
+    expect(shouldHoldHandbrake(true, 0, 4, Math.hypot(3, 4), 0)).toBe(false);
+    expect(shouldHoldHandbrake(true, 0, 4, 0, 0.151)).toBe(false);
+    expect(shouldHoldHandbrake(true, 0, 4, 0, -0.151)).toBe(false);
+  });
+});
 
 describe("clamp", () => {
   it("bounds values", () => {

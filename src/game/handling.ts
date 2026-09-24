@@ -1,8 +1,24 @@
 /**
- * Pure handling/AI math, extracted verbatim from Car and BotController so it can be
- * unit-tested in isolation. These functions are deterministic and side-effect free —
- * NO behaviour change: the formulae are exactly those that were inline before.
+ * Pure handling/AI math shared by Car and BotController.
+ * These functions are deterministic and side-effect free, so handling decisions
+ * can be unit-tested in isolation.
  */
+
+/**
+ * Settle only residual motion under the handbrake, never a slide or burnout.
+ * Require at least two wheel contacts so a single-wheel landing stays dynamic.
+ * The limits are 0.15 m/s horizontally and 0.15 rad/s in yaw.
+ */
+export function shouldHoldHandbrake(
+  handbrake: boolean,
+  throttle: number,
+  groundedWheels: number,
+  horizontalSpeed: number,
+  yawRate: number
+): boolean {
+  return handbrake && throttle === 0 && groundedWheels >= 2 &&
+    horizontalSpeed <= 0.15 && Math.abs(yawRate) <= 0.15;
+}
 
 /** Clamp `v` into [lo, hi]. */
 export function clamp(v: number, lo: number, hi: number): number {

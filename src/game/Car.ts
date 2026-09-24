@@ -179,7 +179,7 @@ export class Car {
     const connZFront = spec.halfLength - (spec.wheelZInsetFront ?? spec.wheelZInset ?? 0.25);
     const connZRear = spec.halfLength - (spec.wheelZInsetRear ?? spec.wheelZInset ?? 0.25);
     const connX = spec.halfWidth + (spec.wheelXOffset ?? 0);
-    
+
     const wheelPositions = [
       new R.Vector3(-connX, connY, connZFront),   // FL
       new R.Vector3(connX, connY, connZFront),    // FR
@@ -208,10 +208,10 @@ export class Car {
     const wheelGeo = new THREE.CylinderGeometry(spec.wheelRadius, spec.wheelRadius, spec.wheelWidth, 18);
     wheelGeo.rotateZ(Math.PI / 2); // align cylinder axis to local X (the axle)
     const useDebug = spec.name === "Tank" || spec.name === "Toyota";
-    const wheelMat = useDebug 
+    const wheelMat = useDebug
       ? new THREE.MeshBasicMaterial({ color: 0xff00aa, wireframe: true, transparent: true, opacity: 0.4 })
       : createRimMaterial({ color: 0x14151a, metalness: 0.1, roughness: 0.8, rimStrength: 0.18 });
-      
+
     for (let i = 0; i < 4; i++) {
       const m = new THREE.Mesh(wheelGeo, wheelMat);
       m.castShadow = !useDebug;
@@ -224,7 +224,7 @@ export class Car {
     if (spec.name === "Tank" || spec.name === "Toyota" || spec.name === "Ram") {
       const root = new THREE.Group();
       const loader = new GLTFLoader();
-      
+
       let glbPath = '/assets/d01c4c8e1685f8a60e41844cdde58a22.glb';
       if (spec.name === "Toyota") glbPath = '/assets/toyota.glb';
       else if (spec.name === "Ram") glbPath = '/assets/ram.glb';
@@ -241,25 +241,25 @@ export class Car {
         // Increase this multiplier (e.g. to 3.0 or 3.5) if the 3D model's tires
         // are too close together compared to the pink physics tires.
         // Decrease it (e.g. to 2.5) if they are too far apart.
-        let modelMultiplier = spec.visualScaleMultiplier ?? 3.0; 
+        let modelMultiplier = spec.visualScaleMultiplier ?? 3.0;
         if (!spec.visualScaleMultiplier && spec.name === "Toyota") {
-          modelMultiplier = 4.0; 
+          modelMultiplier = 4.0;
         }
-        
-        const targetLength = spec.halfLength * modelMultiplier; 
-        
+
+        const targetLength = spec.halfLength * modelMultiplier;
+
         // Scale proportionally based on length
         const scale = targetLength / size.z;
-        
+
         model.scale.setScalar(scale);
 
         // Re-calculate box after scaling to center it properly
         box.setFromObject(model);
         const center = box.getCenter(new THREE.Vector3());
-        
+
         // Offset model so its center aligns with the root (0,0,0)
         model.position.sub(center);
-        
+
         // Apply visual rotation if defined
         if (spec.visualRotationY) {
           model.rotation.y = spec.visualRotationY;
@@ -279,7 +279,7 @@ export class Car {
             const mesh = child as THREE.Mesh;
             mesh.castShadow = true;
             mesh.receiveShadow = true;
-            
+
             // Convert GLB materials to our custom RimMaterial so they get the cool edge glow
             // and don't look like flat black plastic due to the lack of an environment map!
             if (mesh.material) {
@@ -821,7 +821,7 @@ export class Car {
         }
       }
     };
-    
+
     // Recursively dispose all children of the chassis
     this.chassisMesh.traverse(disposeObject);
     scene.remove(this.chassisMesh);

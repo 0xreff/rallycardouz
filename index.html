@@ -46,16 +46,175 @@
 
       #loader {
         position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-        flex-direction: column; gap: 18px; background: #0a0e1a; z-index: 10;
-        font-family: "Segoe UI", system-ui, sans-serif; color: #8aa6ff;
-        transition: opacity 0.5s ease; }
-      #loader .title { font-size: 28px; font-weight: 800; letter-spacing: 1px;
-        background: linear-gradient(90deg,#6f8fff,#bcd4ff,#6f8fff);
-        -webkit-background-clip: text; background-clip: text; color: transparent; }
-      #loader .sub { font-size: 13px; opacity: 0.6; }
-      .spinner { width: 34px; height: 34px; border: 3px solid rgba(111,143,255,0.25);
-        border-top-color: #6f8fff; border-radius: 50%; animation: spin 0.8s linear infinite; }
-      @keyframes spin { to { transform: rotate(360deg); } }
+        flex-direction: column; gap: 24px; background: #0a0e1a; z-index: 10;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        transition: opacity 0.5s ease;
+      }
+      #loader .race-title {
+        font-size: 52px; font-weight: 900; letter-spacing: 6px;
+        text-transform: uppercase; color: #ff1a1a;
+        text-shadow: 0 0 20px rgba(255,26,26,0.5), 0 0 60px rgba(255,26,26,0.25);
+      }
+      #loader .sub { font-size: 13px; opacity: 0.6; color: #8aa6ff; }
+
+      /* Uiverse.io loader by andrew-manzyk */
+      .loader {
+        --main-size: 4em;
+        --text-color: #ffffff;
+        --shine-color: #ffffff40;
+        --shadow-color: #aaaaaa;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        overflow: hidden;
+        user-select: none;
+        position: relative;
+        font-size: var(--main-size);
+        font-weight: 900;
+        text-transform: uppercase;
+        color: var(--text-color);
+        width: 7.3em;
+        height: 1em;
+        filter: drop-shadow(0 0 0.05em var(--shine-color));
+      }
+      .loader .text {
+        display: flex; align-items: center; justify-content: center;
+        text-align: center; white-space: nowrap; overflow: hidden; position: absolute;
+      }
+      .loader .text:nth-child(1) {
+        clip-path: polygon(0% 0%, 11.11% 0%, 11.11% 100%, 0% 100%);
+        font-size: calc(var(--main-size) / 20); margin-left: -2.1em; opacity: 0.6;
+      }
+      .loader .text:nth-child(2) {
+        clip-path: polygon(11.11% 0%, 22.22% 0%, 22.22% 100%, 11.11% 100%);
+        font-size: calc(var(--main-size) / 16); margin-left: -0.98em; opacity: 0.7;
+      }
+      .loader .text:nth-child(3) {
+        clip-path: polygon(22.22% 0%, 33.33% 0%, 33.33% 100%, 22.22% 100%);
+        font-size: calc(var(--main-size) / 13); margin-left: -0.33em; opacity: 0.8;
+      }
+      .loader .text:nth-child(4) {
+        clip-path: polygon(33.33% 0%, 44.44% 0%, 44.44% 100%, 33.33% 100%);
+        font-size: calc(var(--main-size) / 11); margin-left: -0.05em; opacity: 0.9;
+      }
+      .loader .text:nth-child(5) {
+        clip-path: polygon(44.44% 0%, 55.55% 0%, 55.55% 100%, 44.44% 100%);
+        font-size: calc(var(--main-size) / 10); margin-left: 0em; opacity: 1;
+      }
+      .loader .text:nth-child(6) {
+        clip-path: polygon(55.55% 0%, 66.66% 0%, 66.66% 100%, 55.55% 100%);
+        font-size: calc(var(--main-size) / 11); margin-left: 0.05em; opacity: 0.9;
+      }
+      .loader .text:nth-child(7) {
+        clip-path: polygon(66.66% 0%, 77.77% 0%, 77.77% 100%, 66.66% 100%);
+        font-size: calc(var(--main-size) / 13); margin-left: 0.33em; opacity: 0.8;
+      }
+      .loader .text:nth-child(8) {
+        clip-path: polygon(77.77% 0%, 88.88% 0%, 88.88% 100%, 77.77% 100%);
+        font-size: calc(var(--main-size) / 16); margin-left: 0.98em; opacity: 0.7;
+      }
+      .loader .text:nth-child(9) {
+        clip-path: polygon(88.88% 0%, 100% 0%, 100% 100%, 88.88% 100%);
+        font-size: calc(var(--main-size) / 20); margin-left: 2.1em; opacity: 0.6;
+      }
+      .loader .text span {
+        animation: scrolling 2s cubic-bezier(0.1,0.6,0.9,0.4) infinite,
+                   shadow 2s cubic-bezier(0.1,0.6,0.9,0.4) infinite;
+      }
+      .loader .text:nth-child(1) span {
+        background: linear-gradient(to right, var(--text-color) 4%, var(--shadow-color) 7%);
+        background-size: 200% auto; background-clip: text; color: transparent;
+      }
+      .loader .text:nth-child(2) span {
+        background: linear-gradient(to right, var(--text-color) 9%, var(--shadow-color) 13%);
+        background-size: 200% auto; background-clip: text; color: transparent;
+      }
+      .loader .text:nth-child(3) span {
+        background: linear-gradient(to right, var(--text-color) 15%, var(--shadow-color) 18%);
+        background-size: 200% auto; background-clip: text; color: transparent;
+      }
+      .loader .text:nth-child(4) span {
+        background: linear-gradient(to right, var(--text-color) 20%, var(--shadow-color) 23%);
+        background-size: 200% auto; background-clip: text; color: transparent;
+      }
+      .loader .text:nth-child(6) span {
+        background: linear-gradient(to right, var(--shadow-color) 29%, var(--text-color) 32%);
+        background-size: 200% auto; background-clip: text; color: transparent;
+      }
+      .loader .text:nth-child(7) span {
+        background: linear-gradient(to right, var(--shadow-color) 34%, var(--text-color) 37%);
+        background-size: 200% auto; background-clip: text; color: transparent;
+      }
+      .loader .text:nth-child(8) span {
+        background: linear-gradient(to right, var(--shadow-color) 39%, var(--text-color) 42%);
+        background-size: 200% auto; background-clip: text; color: transparent;
+      }
+      .loader .text:nth-child(9) span {
+        background: linear-gradient(to right, var(--shadow-color) 45%, var(--text-color) 48%);
+        background-size: 200% auto; background-clip: text; color: transparent;
+      }
+      .loader .line {
+        position: relative; display: flex; align-items: center; justify-content: center;
+        overflow: hidden; height: 0.05em; width: calc(var(--main-size) / 2);
+        margin-top: 0.9em; border-radius: 0.05em;
+      }
+      .loader .line::before {
+        content: ""; position: absolute; height: 100%; width: 100%;
+        background-color: var(--text-color); opacity: 0.3;
+      }
+      .loader .line::after {
+        content: ""; position: absolute; height: 100%; width: 100%;
+        background-color: var(--text-color); border-radius: 0.05em;
+        transform: translateX(-90%); animation: wobble 2s cubic-bezier(0.5,0.8,0.5,0.2) infinite;
+      }
+      @keyframes wobble {
+        0%   { transform: translateX(-90%); }
+        50%  { transform: translateX(90%); }
+        100% { transform: translateX(-90%); }
+      }
+      @keyframes scrolling {
+        0%   { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+      }
+      @keyframes shadow {
+        0%   { background-position: -98% 0; }
+        100% { background-position: 102% 0; }
+      }
+
+      /* 12-logo triangle animation */
+      #logo-12 {
+        width: 180px;
+        height: auto;
+      }
+      @media (min-width: 640px) { #logo-12 { width: 230px; } }
+      .logo-base {
+        fill: none;
+        stroke: rgba(255,255,255,0.06);
+        stroke-width: 6;
+      }
+      .logo-tri {
+        fill: #ff1a1a;
+        opacity: 0;
+        animation: tri-in var(--tri-dur) ease-out forwards;
+        animation-delay: var(--tri-delay);
+      }
+      @keyframes tri-in {
+        0%   { opacity: 0; transform: scale(0.3); }
+        60%  { opacity: 1; transform: scale(1.05); }
+        100% { opacity: 1; transform: scale(1); }
+      }
+      .logo-outline {
+        fill: none;
+        stroke: rgba(255,255,255,0.15);
+        stroke-width: 4;
+        stroke-dasharray: 1;
+        stroke-dashoffset: 1;
+        animation: draw-in 1.4s ease-out forwards;
+        animation-delay: 0.3s;
+      }
+      @keyframes draw-in {
+        to { stroke-dashoffset: 0; }
+      }
     </style>
   </head>
   <body>
@@ -70,10 +229,76 @@
       </div>
     </div>
     <div id="loader">
-      <div class="title">REBORN RACER</div>
-      <div class="spinner"></div>
+      <svg id="logo-12" viewBox="180 230 870 790" role="img" aria-label="12">
+        <defs>
+          <clipPath id="logo-clip">
+            <path d="M392 268 H574 V655 A172 172 0 0 1 398 823 V600 H224 V438 H285 A107 107 0 0 0 392 331 Z"/>
+            <path d="M628 268 H752 A240 240 0 0 1 992 508 Q992 610 918 678 L620 978 H398 L793 590 Q822 560 822 518 A94 94 0 0 0 735 424 H628 Z"/>
+            <path d="M810 978 V900 A100 100 0 0 1 910 800 H1000 V978 Z"/>
+          </clipPath>
+        </defs>
+        <path d="M392 268 H574 V655 A172 172 0 0 1 398 823 V600 H224 V438 H285 A107 107 0 0 0 392 331 Z" class="logo-base"/>
+        <path d="M628 268 H752 A240 240 0 0 1 992 508 Q992 610 918 678 L620 978 H398 L793 590 Q822 560 822 518 A94 94 0 0 0 735 424 H628 Z" class="logo-base"/>
+        <path d="M810 978 V900 A100 100 0 0 1 910 800 H1000 V978 Z" class="logo-base"/>
+        <g clip-path="url(#logo-clip)" id="tri-container"></g>
+        <path d="M392 268 H574 V655 A172 172 0 0 1 398 823 V600 H224 V438 H285 A107 107 0 0 0 392 331 Z" pathLength="1" class="logo-outline"/>
+        <path d="M628 268 H752 A240 240 0 0 1 992 508 Q992 610 918 678 L620 978 H398 L793 590 Q822 560 822 518 A94 94 0 0 0 735 424 H628 Z" pathLength="1" class="logo-outline"/>
+        <path d="M810 978 V900 A100 100 0 0 1 910 800 H1000 V978 Z" pathLength="1" class="logo-outline"/>
+      </svg>
+      <div class="race-title">RACE</div>
+      <div class="loader">
+        <div class="text"><span>loading&nbsp;</span></div>
+        <div class="text"><span>loading&nbsp;</span></div>
+        <div class="text"><span>loading&nbsp;</span></div>
+        <div class="text"><span>loading&nbsp;</span></div>
+        <div class="text"><span>loading&nbsp;</span></div>
+        <div class="text"><span>loading&nbsp;</span></div>
+        <div class="text"><span>loading&nbsp;</span></div>
+        <div class="text"><span>loading&nbsp;</span></div>
+        <div class="text"><span>loading&nbsp;</span></div>
+        <div class="line"></div>
+      </div>
       <div class="sub">Initializing physics &amp; renderer…</div>
     </div>
+    <script>
+    (function buildLogo12() {
+      var S = 64, H = S * 0.866, STEP = 9, TRI_DUR = 420;
+      var x0 = 200, y0 = 250, x1 = 1030, y1 = 1000;
+      var tris = [];
+      for (var r = 0; y0 + r * H < y1; r++) {
+        var y = y0 + r * H;
+        var off = r % 2 ? -S / 2 : 0;
+        for (var c = -1; x0 + off + c * (S / 2) < x1; c++) {
+          var x = x0 + off + c * (S / 2);
+          var up = (c + r) % 2 === 0;
+          var d = up
+            ? 'M' + x + ' ' + (y + H) + ' L' + (x + S / 2) + ' ' + y + ' L' + (x + S) + ' ' + (y + H) + ' Z'
+            : 'M' + x + ' ' + y + ' L' + (x + S) + ' ' + y + ' L' + (x + S / 2) + ' ' + (y + H) + ' Z';
+          var cx = x + S / 2, cy = y + H / 2;
+          tris.push({ d: d, delay: cx + cy * 0.9 });
+        }
+      }
+      tris.sort(function(a, b) { return a.delay - b.delay; });
+      var ns = 'http://www.w3.org/2000/svg';
+      var container = document.getElementById('tri-container');
+
+      function render() {
+        container.innerHTML = '';
+        for (var i = 0; i < tris.length; i++) {
+          var el = document.createElementNS(ns, 'path');
+          el.setAttribute('d', tris[i].d);
+          el.setAttribute('class', 'logo-tri');
+          el.style.setProperty('--tri-delay', (900 + i * STEP) + 'ms');
+          el.style.setProperty('--tri-dur', TRI_DUR + 'ms');
+          container.appendChild(el);
+        }
+      }
+
+      render();
+      var total = 900 + (tris.length - 1) * STEP + TRI_DUR + 1400;
+      setInterval(render, total);
+    })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -3,18 +3,34 @@ node_modules/
 
 # Build output
 dist/
+dist-ssr/
+*.local
+
+# Environment variables (keep the example file)
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.sw?
 
 # Logs
+logs/
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# Editor / OS
+# Caches / TypeScript
+.vite/
+.cache/
+*.tsbuildinfo
+
+# OS files
 .DS_Store
 Thumbs.db
-.vscode/
-.idea/
-
-# Env
-.env
-.env.local
-.env.*.local

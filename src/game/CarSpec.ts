@@ -88,6 +88,7 @@ export interface CarSpec {
   sideFrictionStiffness: number; // lateral grip; higher grips harder (and can tip a tall car)
 
   // --- Visual & Wheel Tuning (for .glb models) ---
+  modelFile?: string;             // .glb in public/assets/ (e.g. "toyota6.glb"); loaded instead of the box car
   visualScaleMultiplier?: number; // Shrink/grow the 3D model (e.g. 3.0, 4.0)
   visualZOffset?: number;         // Slide the 3D model forward/backward (+/- meters)
   visualYOffset?: number;         // Slide the 3D model up/down (+/- meters) to fix tire overlap
@@ -244,4 +245,19 @@ export const CARS: Record<string, CarSpec> = {
   },
 };
 
-export const DEFAULT_CAR = "toyota";
+// Toyota6: same driving as the Toyota, different 3D model (toyota6.glb in public/assets/).
+// The visual values below are starting guesses — tune them by eye (see comments).
+CARS.toyota6 = {
+  ...CARS.toyota,
+  name: "Toyota6",
+  modelFile: "toyota6.glb",
+  visualScaleMultiplier: 4.0, // bigger → model grows; match its length to the physics box
+  visualZOffset: -0.5,         // slide the body forward (+) / backward (-)
+  visualYOffset: 0.0,         // raise (+) / lower (-) the body
+  visualRotationY: 0,         // Math.PI if the car drives backwards
+  wheelZInsetFront: 0.25,     // front wheels: bigger → further from the front bumper
+  wheelZInsetRear: -0.5,      // rear wheels: bigger → further from the rear bumper
+  wheelXOffset: 0.25,          // + pushes all wheels outward (wider track)
+};
+
+export const DEFAULT_CAR = "toyota6";

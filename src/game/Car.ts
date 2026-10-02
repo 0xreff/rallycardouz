@@ -64,6 +64,10 @@ export class Car {
   private controller: RAPIER.DynamicRayCastVehicleController;
   private chassisMesh: THREE.Object3D;
   private wheelMeshes: THREE.Mesh[] = [];
+  // Wheels/brakes found INSIDE the .glb (WheelFtL, BrakeFtL, ...). When present they
+  // replace the plain cylinders. Index order matches the physics: 0 FL, 1 FR, 2 BL, 3 BR.
+  private modelWheels: (THREE.Object3D | null)[] = [null, null, null, null];
+  private modelBrakes: (THREE.Object3D | null)[] = [null, null, null, null];
   private steer = 0;
   private appliedEngine = 0; // smoothed engine force (ref EngineRate ramp)
   private brakePressure = 0; // smoothed 0..1 brake "pedal" (pressure build-up)
@@ -221,20 +225,25 @@ export class Car {
   }
 
   private buildChassis(spec: CarSpec): THREE.Object3D {
-    if (spec.name === "Tank" || spec.name === "Toyota" || spec.name === "Ram") {
+    if (spec.modelFile || spec.name === "Tank" || spec.name === "Toyota" || spec.name === "Ram") {
       const root = new THREE.Group();
       const loader = new GLTFLoader();
 
       const assetBase = `${import.meta.env.BASE_URL}assets/`;
       let glbPath = `${assetBase}d01c4c8e1685f8a60e41844cdde58a22.glb`;
-      if (spec.name === "Toyota") glbPath = `${assetBase}toyota.glb`;
+      if (spec.modelFile) glbPath = `${assetBase}${spec.modelFile}`;
+      else if (spec.name === "Toyota") glbPath = `${assetBase}toyota.glb`;
       else if (spec.name === "Ram") glbPath = `${assetBase}ram.glb`;
 
       loader.load(glbPath, (gltf) => {
         const model = gltf.scene;
 
         // Calculate current bounding box
-        const box = new THREE.Box3().setFromObject(model);
+        // Models loaded via spec.modelFile use an exact (per-vertex) bounding box. The
+        // default box is only approximate for rotated parts (e.g. separated wheels),
+        // which would throw off the size and ground alignment.
+        const precise = !!spec.modelFile;
+        const box = new THREE.Box3().setFromObject(model, precise);
         const size = box.getSize(new THREE.Vector3());
 
         // Target size based on spec length, assuming typical car proportions
@@ -255,7 +264,7 @@ export class Car {
         model.scale.setScalar(scale);
 
         // Re-calculate box after scaling to center it properly
-        box.setFromObject(model);
+        box.setFromObject(model, precise);
         const center = box.getCenter(new THREE.Vector3());
 
         // Offset model so its center aligns with the root (0,0,0)
@@ -301,6 +310,10 @@ export class Car {
           }
         });
         root.add(model);
+
+        // Find the real wheels inside the model and hand them to the physics.
+        root.updateMatrixWorld(true);
+        this.bindModelWheels(root, model);
       }, undefined, (error) => {
         console.error(`Failed to load ${glbPath}:`, error);
         root.add(this.buildProceduralChassis(spec));
@@ -309,6 +322,85 @@ export class Car {
     }
 
     return this.buildProceduralChassis(spec);
+  }
+
+  /**
+   * Take the wheel groups out of the loaded model so the physics can move them.
+   *
+   * Each wheel gets a "pivot": an empty Group placed at the wheel's centre, with the
+   * wheel re-parented inside it. Rotating the pivot spins the wheel around its OWN
+   * centre (rotating the wheel directly would swing it around the model's origin).
+   * Wheels are matched to physics slots by position (left/right, front/back), so it
+   * doesn't matter how the model names its left and right.
+   */
+  private bindModelWheels(root: THREE.Object3D, model: THREE.Object3D) {
+    const brakeRe = /brake|caliper|rotor/i;
+    const wheels = this.findNodes(model, /wheel|tyre|tire/i, brakeRe);
+    const brakes = this.findNodes(model, brakeRe);
+    if (wheels.length !== 4) {
+      // Not an error: models with the wheels baked into the body keep the cylinders.
+      console.info(
+        `Car: found ${wheels.length} wheel nodes (need 4). Top-level nodes:`,
+        model.children.slice(0, 15).map((n) => n.name)
+      );
+      return;
+    }
+
+    const box = new THREE.Box3();
+    const centers: (THREE.Vector3 | null)[] = [null, null, null, null];
+    const found: { obj: THREE.Object3D; center: THREE.Vector3; slot: number }[] = [];
+
+    for (const w of wheels) {
+      const center = box.setFromObject(w).getCenter(new THREE.Vector3());
+      root.worldToLocal(center); // centre in the chassis' own space
+      // Same order as the physics wheels: 0 FL (-x,+z), 1 FR (+x,+z), 2 BL (-x,-z), 3 BR (+x,-z)
+      const slot = (center.x < 0 ? 0 : 1) + (center.z > 0 ? 0 : 2);
+      if (centers[slot]) {
+        console.warn("Car: two model wheels map to the same slot, keeping cylinder wheels.");
+        return;
+      }
+      centers[slot] = center;
+      found.push({ obj: w, center, slot });
+    }
+
+    for (const { obj, center, slot } of found) {
+      const pivot = new THREE.Group();
+      pivot.position.copy(center);
+      root.add(pivot);
+      pivot.attach(obj); // keeps the wheel exactly where it was
+      this.modelWheels[slot] = pivot;
+    }
+
+    // Brake discs/calipers follow the wheel position and steering, but don't spin.
+    for (const b of brakes) {
+      const c = box.setFromObject(b).getCenter(new THREE.Vector3());
+      root.worldToLocal(c);
+      let slot = 0;
+      for (let i = 1; i < 4; i++) {
+        if (c.distanceToSquared(centers[i]!) < c.distanceToSquared(centers[slot]!)) slot = i;
+      }
+      const pivot = new THREE.Group();
+      pivot.position.copy(centers[slot]!);
+      root.add(pivot);
+      pivot.attach(b);
+      this.modelBrakes[slot] = pivot;
+    }
+
+    // The real wheels are in use: hide the placeholder cylinders.
+    this.wheelMeshes.forEach((m) => (m.visible = false));
+  }
+
+  /** Outermost nodes whose name matches `re` (doesn't descend into a match). */
+  private findNodes(model: THREE.Object3D, re: RegExp, exclude?: RegExp): THREE.Object3D[] {
+    const out: THREE.Object3D[] = [];
+    const visit = (o: THREE.Object3D) => {
+      for (const child of o.children) {
+        if (re.test(child.name) && !(exclude && exclude.test(child.name))) out.push(child);
+        else visit(child);
+      }
+    };
+    visit(model);
+    return out;
   }
 
   private buildProceduralChassis(spec: CarSpec): THREE.Object3D {
@@ -776,6 +868,19 @@ export class Car {
 
       this.wheelMeshes[i].position.copy(world);
       this.wheelMeshes[i].quaternion.copy(q);
+
+      // Real model wheels: they are children of the chassis, so position is in chassis
+      // space (no chassis matrix) and rotation is just steer (Y) then roll (X).
+      const pivot = this.modelWheels[i];
+      if (pivot) {
+        pivot.position.set(conn.x, conn.y - susp, conn.z);
+        pivot.quaternion.copy(this._steerQ).multiply(this._rollQ);
+        const brake = this.modelBrakes[i];
+        if (brake) {
+          brake.position.copy(pivot.position);
+          brake.quaternion.copy(this._steerQ);
+        }
+      }
     }
   }
 

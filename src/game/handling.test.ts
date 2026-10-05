@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   clamp, nextImpact, creepTopEndCap, speedFraction, avoidanceControl, shouldHoldHandbrake,
-  powerOversteer, airControlRate, tiltAssist,
+  powerOversteer, airAttitudeRate, tiltAssist,
 } from "./handling";
 
 describe("shouldHoldHandbrake", () => {
@@ -115,22 +115,35 @@ describe("powerOversteer", () => {
   });
 });
 
-describe("airControlRate", () => {
+describe("airAttitudeRate", () => {
   const dt = 1 / 60;
 
-  it("leaves the rate alone with no input", () => {
-    expect(airControlRate(1.3, 0, 3, 2, dt)).toBe(1.3);
+  it("does nothing when already on target and still", () => {
+    expect(airAttitudeRate(0, 0, 10, 5, dt)).toBe(0);
   });
 
-  it("ramps toward input x maxRate by at most accel*dt per step", () => {
-    expect(airControlRate(0, 1, 3, 2, dt)).toBeCloseTo(3 * dt, 6);
-    expect(airControlRate(0, -1, 3, 2, dt)).toBeCloseTo(-3 * dt, 6);
+  it("rotates toward the target", () => {
+    expect(airAttitudeRate(0, 0.5, 10, 5, dt)).toBeGreaterThan(0);
+    expect(airAttitudeRate(0, -0.5, 10, 5, dt)).toBeLessThan(0);
   });
 
-  it("settles at the cap", () => {
-    let r = 0;
-    for (let i = 0; i < 600; i++) r = airControlRate(r, 1, 3, 2, dt);
-    expect(r).toBeCloseTo(2, 6);
+  it("damps a spin it did not cause", () => {
+    const r = airAttitudeRate(3, 0, 10, 5, dt);
+    expect(r).toBeLessThan(3);
+    expect(r).toBeGreaterThan(0);
+  });
+
+  it("settles a tilted car without overshooting wildly", () => {
+    let angle = 1; // rad off target
+    let rate = 0;
+    let minAngle = angle;
+    for (let i = 0; i < 300; i++) {
+      rate = airAttitudeRate(rate, -angle, 10, 5, dt);
+      angle += rate * dt;
+      minAngle = Math.min(minAngle, angle);
+    }
+    expect(Math.abs(angle)).toBeLessThan(0.02);
+    expect(minAngle).toBeGreaterThan(-0.1);
   });
 });
 

@@ -10,7 +10,7 @@ import { CarFX } from "./CarFX";
 import { SURFACES, SurfaceMap, type SurfaceProps } from "./Surfaces";
 import {
   nextImpact, creepTopEndCap, speedFraction as computeSpeedFraction, shouldHoldHandbrake,
-  powerOversteer, airControlRate, tiltAssist,
+  powerOversteer, airAttitudeRate, tiltAssist,
 } from "./handling";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CarSpec } from "./CarSpec";
@@ -49,12 +49,14 @@ const FRICTION_CIRCLE = 0.55;
 const LEAN_RATE = 6;    // how fast the body roll eases toward its target
 const MAX_LEAN = 0.24;  // hard cap on the visual roll (~14°); real suspension roll adds to it
 
-// Air control: in the air W/S pitch the nose down/up and A/D spin the car, to line
-// up a landing. Gentle: rates ramp in at these accelerations (rad/s²) and cap at
-// AIR_MAX_RATE (rad/s). Releasing the keys leaves the rotation alone.
-const AIR_PITCH_ACCEL = 3.0;
-const AIR_YAW_ACCEL = 3.5;
-const AIR_MAX_RATE = 2.2;
+// Rally landing assist (airborne only, no player input): the car's weight settles
+// it toward the flight path, kept between AIR_MIN_PITCH (nose down) and
+// AIR_MAX_PITCH, with roll levelled, so jumps land on four wheels.
+const AIR_LEVEL_K = 10;       // spring (1/s²)
+const AIR_LEVEL_D = 5;        // damping (1/s)
+const AIR_PATH_FOLLOW = 0.5;  // how much the nose follows the flight path
+const AIR_MIN_PITCH = -0.3;   // rad, ~17° nose down at most
+const AIR_MAX_PITCH = 0.05;   // rad, barely nose up: kickers can't flip it backwards
 
 // Chassis contact feel: bouncy, slippery bodywork, so car hits and wall scrapes
 // knock cars apart (bumper-car fun) instead of gluing them together.
@@ -123,7 +125,8 @@ export class Car {
   private _stabFwd = new THREE.Vector3();
   private _stabRight = new THREE.Vector3();
   private _stabCorrective = new THREE.Vector3();
-  // airControl() scratch
+  // airAttitude() scratch
+  private _airFwd = new THREE.Vector3();
   private _airRight = new THREE.Vector3();
   private _airUp = new THREE.Vector3();
   private _airW = new THREE.Vector3();
@@ -618,9 +621,10 @@ export class Car {
     // rear so the car rotates further into the turn — present across the range.
     const liftoff = coasting && controls.steer !== 0 && speed > 2 ? spec.liftoffOversteer : 0;
 
-    // Air control. (The old forced lift-off spin is gone: on the ground the car now
-    // rotates only through its tyres, via lift-off, power and handbrake oversteer.)
-    if (airborne) this.airControl(controls, dt);
+    // Airborne: the landing assist settles the car's attitude (no player input).
+    // On the ground the car rotates only through its tyres (lift-off, power and
+    // handbrake oversteer).
+    if (airborne) this.airAttitude(dt);
 
     // Cosmetic body roll: the chassis visibly leans with the slide so you can see
     // its weight shifting. Physics stays upright (no tipping) — this only drives
@@ -861,23 +865,36 @@ export class Car {
   }
 
   /**
-   * Gentle air control while no wheel touches the ground: W/S pitch the nose
-   * down/up, A/D spin the car about its own up axis. It only steers the angular
-   * rate toward a capped target (airControlRate), so it shapes a jump without
-   * overriding the physics; released keys leave the rotation untouched.
+   * Rally landing assist (not player control). In the air the car's weight
+   * settles it into a landing attitude: pitch eases toward the flight path, held
+   * between slightly nose-down and level, so a kicker can't flip the nose over
+   * backwards; roll eases back to level. Yaw is left alone. Skipped when the car
+   * is already badly flipped (self-right / recover handle that).
    */
-  private airControl(controls: { throttle: number; brake: number; steer: number }, dt: number) {
+  private airAttitude(dt: number) {
     const r = this.body.rotation();
     const q = this.rotScratch.set(r.x, r.y, r.z, r.w);
-    const right = this._airRight.set(1, 0, 0).applyQuaternion(q); // +rate = nose down
-    const up = this._airUp.set(0, 1, 0).applyQuaternion(q);       // +rate = nose toward +X (screen left)
+    const up = this._airUp.set(0, 1, 0).applyQuaternion(q);
+    if (up.y < 0.3) return;
+    const fwd = this._airFwd.set(0, 0, 1).applyQuaternion(q);
+    const right = this._airRight.set(1, 0, 0).applyQuaternion(q);
+
+    // Target pitch: part of the flight-path angle (nose-first or tail-first), clamped.
+    const v = this.body.linvel();
+    const hs = Math.hypot(v.x, v.z);
+    const dir = v.x * fwd.x + v.z * fwd.z >= 0 ? 1 : -1;
+    const flight = dir * Math.atan2(v.y, Math.max(hs, 1e-3));
+    const moving = THREE.MathUtils.clamp(hs / 6, 0, 1);
+    const target = THREE.MathUtils.clamp(AIR_PATH_FOLLOW * flight * moving, AIR_MIN_PITCH, AIR_MAX_PITCH);
+
+    const pitch = Math.asin(THREE.MathUtils.clamp(fwd.y, -1, 1));  // + = nose up
+    const roll = Math.asin(THREE.MathUtils.clamp(right.y, -1, 1)); // + = +X side up
     const av = this.body.angvel();
     const w = this._airW.set(av.x, av.y, av.z);
-    const pitch = w.dot(right);
-    const yaw = w.dot(up);
-    const pitchIn = controls.throttle - controls.brake;
-    w.addScaledVector(right, airControlRate(pitch, pitchIn, AIR_PITCH_ACCEL, AIR_MAX_RATE, dt) - pitch);
-    w.addScaledVector(up, airControlRate(yaw, -controls.steer, AIR_YAW_ACCEL, AIR_MAX_RATE, dt) - yaw);
+    const pitchRate = w.dot(right); // + = nose down
+    const rollRate = w.dot(fwd);    // + = +X side up
+    w.addScaledVector(right, airAttitudeRate(pitchRate, pitch - target, AIR_LEVEL_K, AIR_LEVEL_D, dt) - pitchRate);
+    w.addScaledVector(fwd, airAttitudeRate(rollRate, -roll, AIR_LEVEL_K, AIR_LEVEL_D, dt) - rollRate);
     const rv = this._rv3; rv.x = w.x; rv.y = w.y; rv.z = w.z;
     this.body.setAngvel(rv, true);
   }

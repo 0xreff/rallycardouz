@@ -74,14 +74,12 @@ export function powerOversteer(
 }
 
 /**
- * One air-control axis: move an angular rate toward `input × maxRate`, by at most
- * `accel · dt` per step. Zero input returns the rate unchanged (no artificial
- * braking of a spin the physics started).
+ * One axis of the airborne landing assist: a spring-damper on an angular rate.
+ * `error` is how far (rad) the car must still rotate in the rate's positive
+ * direction; returns the next rate. Critically-ish damped for k=10, d=5.
  */
-export function airControlRate(rate: number, input: number, accel: number, maxRate: number, dt: number): number {
-  if (input === 0) return rate;
-  const step = accel * dt;
-  return rate + clamp(input * maxRate - rate, -step, step);
+export function airAttitudeRate(rate: number, error: number, stiffness: number, damping: number, dt: number): number {
+  return rate + (stiffness * error - damping * rate) * dt;
 }
 
 /**

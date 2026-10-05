@@ -38,9 +38,10 @@ describe("stationary handbrake", () => {
     car.body.setLinvel({ x: 0.0005, y: 0, z: 0.0005 }, true);
     car.body.setAngvel({ x: 0, y: 0.01, z: 0 }, true);
     car.update({ ...stopped, handbrake: true }, dt);
-    expect(car.body.linvel().x).toBe(0);
-    expect(car.body.linvel().z).toBe(0);
-    expect(car.body.angvel().y).toBe(0);
+    // Exact zero, sign-agnostic: Rapier may return -0, which toBe (Object.is) rejects.
+    expect(Math.abs(car.body.linvel().x)).toBe(0);
+    expect(Math.abs(car.body.linvel().z)).toBe(0);
+    expect(Math.abs(car.body.angvel().y)).toBe(0);
     car.syncMeshes();
     expect(skids.add).not.toHaveBeenCalled();
     expect(smoke.emit).not.toHaveBeenCalled();

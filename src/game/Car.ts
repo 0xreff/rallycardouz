@@ -796,14 +796,45 @@ export class Car {
 
   /**
    * Snapshot the current physics state so syncMeshes() can interpolate between
-   * this (previous) state and the post-step (current) state. Call ONCE per
-   * frame, BEFORE physics.step().
+   * this (previous) state and the post-step (current) state. Call at the START
+   * OF EVERY FIXED SUBSTEP (inside physics.step's callback), so prev/current are
+   * always exactly one fixed step apart. Also call right after a teleport
+   * (reset / recover) so the car isn't blended from its old spot.
    */
   savePreviousState() {
     const t = this.body.translation();
     const r = this.body.rotation();
+    const v = this.body.linvel();
     this._prevPos.set(t.x, t.y, t.z);
     this._prevRot.set(r.x, r.y, r.z, r.w);
+    this._prevVel.set(v.x, v.y, v.z);
+    this._hasPrev = true;
+  }
+
+  // ---- Interpolated (render-time) state, filled by syncMeshes() ----
+  private _prevVel = new THREE.Vector3();
+  private _hasPrev = false; // false until the first snapshot (fresh car → no lerp from origin)
+  private _renderRot = new THREE.Quaternion();
+  private _renderVel = new THREE.Vector3();
+
+  /** Interpolated chassis position (matches the rendered mesh) — use for camera/shadows. */
+  renderPosition(out: THREE.Vector3): THREE.Vector3 {
+    return out.copy(this.chassisMesh.position);
+  }
+
+  /** Interpolated forward (+Z) direction, without the cosmetic lean. */
+  renderForward(out: THREE.Vector3): THREE.Vector3 {
+    return out.set(0, 0, 1).applyQuaternion(this._renderRot);
+  }
+
+  /** Interpolated right (+X) direction, without the cosmetic lean. */
+  renderRight(out: THREE.Vector3): THREE.Vector3 {
+    return out.set(1, 0, 0).applyQuaternion(this._renderRot);
+  }
+
+  /** Interpolated linear velocity. */
+  renderVelocity(out: THREE.Vector3): THREE.Vector3 {
+    return out.copy(this._renderVel);
   }
 
   /**
@@ -819,10 +850,18 @@ export class Car {
     // Interpolated position & rotation for smooth rendering.
     const curPos = this._interpPos.set(t.x, t.y, t.z);
     const curRot = this._chassisQuat.set(r.x, r.y, r.z, r.w);
-    if (alpha < 1) {
+    const lv0 = this.body.linvel();
+    const curVel = this._renderVel.set(lv0.x, lv0.y, lv0.z);
+    if (alpha < 1 && this._hasPrev) {
       curPos.lerpVectors(this._prevPos, curPos, alpha);
-      curRot.slerpQuaternions(this._prevRot, curRot, alpha);
+      curVel.lerpVectors(this._prevVel, curVel, alpha);
+      // NOTE: slerpQuaternions(prev, curRot) with curRot as the target would
+      // copy prev INTO curRot first (aliasing), always yielding prev. Slerp via
+      // a separate quaternion instead.
+      this._renderRot.copy(this._prevRot).slerp(curRot, alpha);
+      curRot.copy(this._renderRot);
     }
+    this._renderRot.copy(curRot);
 
     this.chassisMesh.position.copy(curPos);
     // Add the cosmetic lean as an extra roll about the car's forward axis. The

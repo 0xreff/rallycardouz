@@ -197,13 +197,18 @@ export class Game {
       }
       
       if (controls.recover) this.car.recover();
+      // A teleport (reset / recover) must not be blended from the old spot.
+      if (controls.reset || controls.recover) this.car.savePreviousState();
 
       // Physics advances in fixed 60 Hz substeps (framerate-independent
       // handling); car forces are applied immediately before each substep.
-      // Save the pre-step state so syncMeshes can interpolate for smooth visuals.
-      this.car.savePreviousState();
-      this.bot.savePreviousState();
+      // The pre-step state is snapshotted INSIDE each substep, so syncMeshes
+      // always interpolates across exactly one fixed step (alpha 0..1). Doing it
+      // once per frame froze the car on 0-substep frames and jumped it on
+      // 2-substep frames — the acceleration stutter.
       this.physics.step(dt, (fixedDt) => {
+        this.car.savePreviousState();
+        this.bot.savePreviousState();
         this.car.update(controls, fixedDt);
         this.bot.update(this.botAI.sample(fixedDt), fixedDt); // AI opponent
       });
@@ -216,15 +221,18 @@ export class Game {
       this.dust.update(dt);   // advance surface dust
 
       // Keep the shadow frustum centred on the car as it roams the large map.
-      const cp = this.car.position(this._pos);
+      const cp = this.car.renderPosition(this._pos);
       this.sun.target.position.set(cp.x, cp.y, cp.z);
       this.sun.position.set(cp.x + 30, cp.y + 50, cp.z + 20);
 
+      // Feed the camera the INTERPOLATED state (same as the rendered mesh), not
+      // the raw 60 Hz physics state, so camera and car move in lockstep and the
+      // camera's accel-driven FOV / push-back doesn't flicker.
       const ct = this._camTarget;
-      this.car.position(ct.position);
-      this.car.forwardVector(ct.forward);
-      this.car.rightVector(ct.right);
-      this.car.velocity(ct.velocity);
+      this.car.renderPosition(ct.position);
+      this.car.renderForward(ct.forward);
+      this.car.renderRight(ct.right);
+      this.car.renderVelocity(ct.velocity);
       ct.speedFrac = this.car.speedFraction();
       ct.steer = controls.steer;
       ct.airborne = this.car.isAirborne();

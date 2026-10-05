@@ -18,7 +18,7 @@ export interface SurfaceProps {
 
 export const SURFACES: Record<SurfaceType, SurfaceProps> = {
   tarmac: { grip: 1.0, traction: 1.0, dust: 0.0 },
-  dirt: { grip: 0.65, traction: 0.82, dust: 1.0 },
+  dirt: { grip: 0.6, traction: 0.8, dust: 1.0 },
   wall: { grip: 0.9, traction: 0.9, dust: 0.0 },
 };
 

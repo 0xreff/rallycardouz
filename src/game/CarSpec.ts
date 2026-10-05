@@ -33,7 +33,7 @@ export interface CarSpec {
   engineForce: number;   // N per unit of drive bias (see driveForce)
   reverseForce: number;
   maxBrake: number;      // m/s² foot-brake deceleration
-  handbrake: number;     // m/s² handbrake deceleration
+  handbrake: number;     // m/s² handbrake deceleration (low = long rally slides)
   driveBias: { front: number; back: number }; // 0..1 force multiplier per axle (FWD/RWD/AWD)
   topSpeed: number;      // m/s, the limit full power pulls you to
   launchSpeed: number;   // m/s by which off-the-line boost fades
@@ -49,11 +49,12 @@ export interface CarSpec {
 
   // Static→kinetic grip model.
   slipThreshold: number;    // m/s of lateral slip before the tyre breaks loose
-  kineticGripRatio: number; // 0..1 grip retained while sliding
+  kineticGripRatio: number; // 0..1 grip retained while sliding (lower = longer slides)
   rearGripBias: number;     // <1 → rear breaks loose earlier than the front
   liftoffOversteer: number; // 0..1 lift-off loosens the rear mid-corner
-  liftoffYaw: number;       // low-speed turn assist (rad/s²) on throttle release
   tailSlip: number;         // 0..1 rear grip given up while cornering at speed
+  powerOversteer: number;   // 0..1 throttle mid-corner loosens the driven rear (steer with the throttle)
+  handbrakeGrip: number;    // 0..1 rear side grip left with the handbrake pulled (handbrake turns)
 
   // Cosmetic body lean (visual only).
   leanStrength: number;
@@ -68,7 +69,8 @@ export interface CarSpec {
   lockupGrip: number;
 
   // Suspension & grip. Rapier's stiffness/damping are per unit of chassis mass, so
-  // they don't need retuning when mass changes. Static sag = g / (4 · stiffness).
+  // they don't need retuning when mass changes. Static sag = g / (4 · stiffness),
+  // ride frequency = sqrt(4 · stiffness) / 2π, damping ratio ≈ damping / sqrt(stiffness).
   suspensionRest: number;
   suspensionStiffness: number;
   suspensionTravel: number;
@@ -124,16 +126,20 @@ export function makeCar(c: CarInput): CarSpec {
   };
 }
 
-// Rally-style long-travel suspension: ~1.7 Hz ride, ~8 cm static sag at 9.81.
+// Lively long-travel rally suspension: ~1.5 Hz ride, ~11 cm static sag, light
+// damping (~0.32 bump / ~0.45 rebound) so the body visibly pitches, rolls and
+// bounces over bumps and soaks up landings. Ride height matches Phase 1
+// (rest - sag ≈ 0.22 m), so the fitted models sit exactly as before.
 const RALLY_SUSPENSION = {
-  suspensionRest: 0.3,
-  suspensionStiffness: 30,
-  suspensionTravel: 0.22,
-  suspensionCompression: 2.6,
-  suspensionRelaxation: 3.4,
+  suspensionRest: 0.33,
+  suspensionStiffness: 22,
+  suspensionTravel: 0.32,
+  suspensionCompression: 1.5,
+  suspensionRelaxation: 2.1,
 };
 
 // Toyota pickup: shared by the Toyota and Toyota6 (same driving, different model).
+// Rear-biased AWD rally truck: throttle swings the tail, handbrake flicks it round.
 const TOYOTA: CarInput = {
   name: "Toyota",
   color: 0xdddddd,
@@ -142,18 +148,19 @@ const TOYOTA: CarInput = {
   mass: 1900,
   comOffset: { x: 0, y: -0.35, z: 0.1 },
   inertiaScale: { x: 1, y: 1, z: 1.5 },
-  linearDamping: 0.15, angularDamping: 0.9,
-  engineAccel: 11, reverseAccel: 5, maxBrake: 14, handbrake: 14,
-  driveBias: { front: 0.6, back: 0.4 },
-  topSpeed: 48, launchSpeed: 14, launchBoost: 0.45,
+  linearDamping: 0.1, angularDamping: 0.55,
+  engineAccel: 13, reverseAccel: 6, maxBrake: 14, handbrake: 6,
+  driveBias: { front: 0.35, back: 0.65 },
+  topSpeed: 48, launchSpeed: 14, launchBoost: 0.6,
   overspeed: 0.25, overspeedAccel: 1.2,
-  maxSteer: 0.58, steerRate: 8.5, turnSlowdown: 0.08, engineRate: 6.5,
-  slipThreshold: 4.5, kineticGripRatio: 0.85,
-  rearGripBias: 0.92, liftoffOversteer: 0.1, liftoffYaw: 3.5, tailSlip: 0.25,
-  leanStrength: 0.045, leanLowSpeedAmp: 1.8,
+  maxSteer: 0.6, steerRate: 10, turnSlowdown: 0.04, engineRate: 9,
+  slipThreshold: 3.2, kineticGripRatio: 0.72,
+  rearGripBias: 0.8, liftoffOversteer: 0.35, tailSlip: 0.25,
+  powerOversteer: 0.6, handbrakeGrip: 0.2,
+  leanStrength: 0.04, leanLowSpeedAmp: 1.8,
   brakeBiasFront: 0.65, weightTransfer: 0.25, accelTransfer: 0.15, brakeRamp: 12, lockupAt: 0.9, lockupGrip: 0.35,
   ...RALLY_SUSPENSION,
-  suspensionStiffness: 32,
+  suspensionStiffness: 24, suspensionCompression: 1.6, suspensionRelaxation: 2.3,
   frictionSlip: 3.9, sideFrictionStiffness: 1.45,
   visualScaleMultiplier: 2.0, // fallback only: bumper-to-bumper = collider length
   wheelZInsetFront: 0.95, wheelZInsetRear: 0.95, // ~3.0 m wheelbase
@@ -161,10 +168,9 @@ const TOYOTA: CarInput = {
 };
 
 /**
- * The roster. Handling character (grip, slip, drive layout) is unchanged from the
- * RC versions; only size, mass, forces and suspension moved to real scale.
- * Rally handling retune = Phase 3. Top speeds are unchanged on purpose: the
- * models were already drawn at this size, so speed on screen looks the same.
+ * The roster, retuned for energetic rally fun: punchier engines, quicker response,
+ * looser tails (power / lift-off / handbrake oversteer), bouncy suspension.
+ * Each car keeps its character: Bolt balanced, Hornet wild, Tank planted.
  */
 export const CARS: Record<string, CarSpec> = {
   // Balanced all-rounder (box car).
@@ -176,22 +182,23 @@ export const CARS: Record<string, CarSpec> = {
     mass: 1250,
     comOffset: { x: 0, y: -0.3, z: 0.05 },
     inertiaScale: { x: 1, y: 1, z: 1.5 },
-    linearDamping: 0.15, angularDamping: 0.9,
-    engineAccel: 10, reverseAccel: 5, maxBrake: 13, handbrake: 11,
+    linearDamping: 0.1, angularDamping: 0.55,
+    engineAccel: 12, reverseAccel: 5.5, maxBrake: 13, handbrake: 6,
     driveBias: { front: 0.7, back: 0.9 },
-    topSpeed: 26, launchSpeed: 9, launchBoost: 0.3,
+    topSpeed: 26, launchSpeed: 9, launchBoost: 0.5,
     overspeed: 0.2, overspeedAccel: 0.8,
-    maxSteer: 0.55, steerRate: 6.0, turnSlowdown: 0.15, engineRate: 4.5,
-    slipThreshold: 3.8, kineticGripRatio: 0.78,
-    rearGripBias: 0.75, liftoffOversteer: 0.35, liftoffYaw: 3.0, tailSlip: 0.15,
-    leanStrength: 0.05, leanLowSpeedAmp: 2.0,
+    maxSteer: 0.57, steerRate: 8.5, turnSlowdown: 0.1, engineRate: 8,
+    slipThreshold: 3.4, kineticGripRatio: 0.72,
+    rearGripBias: 0.75, liftoffOversteer: 0.35, tailSlip: 0.15,
+    powerOversteer: 0.45, handbrakeGrip: 0.25,
+    leanStrength: 0.045, leanLowSpeedAmp: 2.0,
     brakeBiasFront: 0.62, weightTransfer: 0.2, accelTransfer: 0.2, brakeRamp: 10, lockupAt: 0.85, lockupGrip: 0.2,
     ...RALLY_SUSPENSION,
     frictionSlip: 3.2, sideFrictionStiffness: 1.15,
     wheelZInset: 0.725, wheelXOffset: -0.1, // ~2.55 m wheelbase, ~1.56 m track
   }),
 
-  // Fast, light, loose tail (box car).
+  // Fast, light, wild tail (box car).
   hornet: makeCar({
     name: "Hornet",
     color: 0xffcc33,
@@ -200,18 +207,19 @@ export const CARS: Record<string, CarSpec> = {
     mass: 1100,
     comOffset: { x: 0, y: -0.3, z: 0.0 },
     inertiaScale: { x: 1, y: 0.9, z: 1.5 },
-    linearDamping: 0.12, angularDamping: 0.8,
-    engineAccel: 12, reverseAccel: 5.5, maxBrake: 12, handbrake: 11,
+    linearDamping: 0.08, angularDamping: 0.5,
+    engineAccel: 14, reverseAccel: 6, maxBrake: 12, handbrake: 5.5,
     driveBias: { front: 0.5, back: 1.0 },
-    topSpeed: 32, launchSpeed: 10, launchBoost: 0.4,
+    topSpeed: 32, launchSpeed: 10, launchBoost: 0.6,
     overspeed: 0.2, overspeedAccel: 1.0,
-    maxSteer: 0.6, steerRate: 6.5, turnSlowdown: 0.15, engineRate: 5.5,
-    slipThreshold: 2.6, kineticGripRatio: 0.7,
-    rearGripBias: 0.6, liftoffOversteer: 0.5, liftoffYaw: 2.6, tailSlip: 0.28,
-    leanStrength: 0.06, leanLowSpeedAmp: 2.2,
+    maxSteer: 0.62, steerRate: 9, turnSlowdown: 0.1, engineRate: 9.5,
+    slipThreshold: 2.4, kineticGripRatio: 0.66,
+    rearGripBias: 0.6, liftoffOversteer: 0.5, tailSlip: 0.28,
+    powerOversteer: 0.7, handbrakeGrip: 0.18,
+    leanStrength: 0.05, leanLowSpeedAmp: 2.2,
     brakeBiasFront: 0.58, weightTransfer: 0.24, accelTransfer: 0.25, brakeRamp: 12, lockupAt: 0.8, lockupGrip: 0.28,
     ...RALLY_SUSPENSION,
-    suspensionStiffness: 28,
+    suspensionStiffness: 20,
     frictionSlip: 2.8, sideFrictionStiffness: 1.0,
     wheelZInset: 0.7, wheelXOffset: -0.1,
   }),
@@ -225,18 +233,19 @@ export const CARS: Record<string, CarSpec> = {
     mass: 2200,
     comOffset: { x: 0, y: -0.32, z: 0.05 },
     inertiaScale: { x: 1.2, y: 1.2, z: 1.6 },
-    linearDamping: 0.18, angularDamping: 1.2,
-    engineAccel: 7, reverseAccel: 4, maxBrake: 14, handbrake: 12,
+    linearDamping: 0.14, angularDamping: 0.8,
+    engineAccel: 9, reverseAccel: 4.5, maxBrake: 14, handbrake: 7,
     driveBias: { front: 1.0, back: 1.0 },
-    topSpeed: 22, launchSpeed: 8, launchBoost: 0.25,
+    topSpeed: 22, launchSpeed: 8, launchBoost: 0.4,
     overspeed: 0.2, overspeedAccel: 0.5,
-    maxSteer: 0.5, steerRate: 5.5, turnSlowdown: 0.2, engineRate: 4.0,
-    slipThreshold: 4.0, kineticGripRatio: 0.85,
-    rearGripBias: 0.9, liftoffOversteer: 0.2, liftoffYaw: 1.2, tailSlip: 0.12,
-    leanStrength: 0.035, leanLowSpeedAmp: 1.6,
+    maxSteer: 0.52, steerRate: 7, turnSlowdown: 0.15, engineRate: 6.5,
+    slipThreshold: 3.6, kineticGripRatio: 0.8,
+    rearGripBias: 0.88, liftoffOversteer: 0.2, tailSlip: 0.12,
+    powerOversteer: 0.3, handbrakeGrip: 0.3,
+    leanStrength: 0.03, leanLowSpeedAmp: 1.6,
     brakeBiasFront: 0.66, weightTransfer: 0.16, accelTransfer: 0.15, brakeRamp: 8, lockupAt: 0.92, lockupGrip: 0.4,
     ...RALLY_SUSPENSION,
-    suspensionStiffness: 38, suspensionCompression: 3.0, suspensionRelaxation: 3.8,
+    suspensionStiffness: 28, suspensionCompression: 1.9, suspensionRelaxation: 2.6,
     frictionSlip: 3.6, sideFrictionStiffness: 0.85,
     visualScaleMultiplier: 2.0,
     wheelZInset: 0.8, wheelXOffset: -0.12,
@@ -253,9 +262,9 @@ export const CARS: Record<string, CarSpec> = {
     wheelRadius: 0.42, wheelWidth: 0.3,
     mass: 2400,
     comOffset: { x: 0, y: -0.38, z: 0.05 },
-    engineAccel: 9, maxBrake: 13, handbrake: 12,
+    engineAccel: 11, maxBrake: 13, handbrake: 6.5,
     topSpeed: 38,
-    liftoffYaw: 1.5, tailSlip: 0.05, weightTransfer: 0.15,
+    tailSlip: 0.05, weightTransfer: 0.15, powerOversteer: 0.45,
     visualRotationY: Math.PI,
     wheelZInsetFront: 1.125, wheelZInsetRear: 1.125, // ~3.55 m wheelbase
     wheelXOffset: -0.12,

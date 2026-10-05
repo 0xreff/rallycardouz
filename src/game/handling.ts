@@ -54,6 +54,46 @@ export function creepTopEndCap(
   return cap;
 }
 
+/**
+ * Fraction (0..0.9) of rear side grip lost to power oversteer: throttle mid-corner
+ * spins the driven rear tyres, so the tail steps out and the throttle steers the
+ * car. Zero standing still or driving straight; stronger with more rear drive
+ * (`rearDriveShare` 0..1) and on loose ground (`rearGrip` < 1). Never 100%.
+ */
+export function powerOversteer(
+  strength: number,
+  throttle: number,
+  steerAbs: number,
+  speed: number,
+  rearDriveShare: number,
+  rearGrip: number
+): number {
+  const rolling = clamp(speed / 8, 0, 1);
+  const loose = 2 - clamp(rearGrip, 0, 1);
+  return clamp(strength * throttle * steerAbs * rolling * rearDriveShare * loose, 0, 0.9);
+}
+
+/**
+ * One air-control axis: move an angular rate toward `input × maxRate`, by at most
+ * `accel · dt` per step. Zero input returns the rate unchanged (no artificial
+ * braking of a spin the physics started).
+ */
+export function airControlRate(rate: number, input: number, accel: number, maxRate: number, dt: number): number {
+  if (input === 0) return rate;
+  const step = accel * dt;
+  return rate + clamp(input * maxRate - rate, -step, step);
+}
+
+/**
+ * Grounded stabilizer strength (0..1) for a tilt angle: 0 inside the free zone so
+ * the suspension can pitch and roll the body, smoothly reaching 1 at 2 × free.
+ */
+export function tiltAssist(angle: number, free: number): number {
+  if (free <= 0) return 1;
+  const t = clamp((angle - free) / free, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 /** Forward speed as a fraction (0..1) of the car's true top speed (incl. overspeed). */
 export function speedFraction(speed: number, topSpeed: number, overspeed: number): number {
   return clamp(Math.abs(speed) / (topSpeed * (1 + overspeed)), 0, 1);

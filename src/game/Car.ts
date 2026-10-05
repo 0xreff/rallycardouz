@@ -8,7 +8,10 @@ import { Smoke } from "../engine/Smoke";
 import { Dust } from "../engine/Dust";
 import { CarFX } from "./CarFX";
 import { SURFACES, SurfaceMap, type SurfaceProps } from "./Surfaces";
-import { nextImpact, creepTopEndCap, speedFraction as computeSpeedFraction, shouldHoldHandbrake } from "./handling";
+import {
+  nextImpact, creepTopEndCap, speedFraction as computeSpeedFraction, shouldHoldHandbrake,
+  powerOversteer, airControlRate, tiltAssist,
+} from "./handling";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CarSpec } from "./CarSpec";
 
@@ -30,6 +33,9 @@ const FRONT = [0, 1];
 // Grounded stabilizer gains (shared by all cars — keeps them from flipping).
 const UPRIGHT_STIFFNESS = 26; // how hard the car springs back to level
 const UPRIGHT_DAMPING = 7;    // damps the tilt rate so it doesn't oscillate
+// Tilt (rad, ~8°) the stabilizer leaves alone, so the suspension can visibly pitch
+// and roll the body. It ramps in smoothly beyond this to stop real flips.
+const TILT_FREE = 0.14;
 
 // Friction-circle coupling: a tyre's grip is shared between turning and braking.
 // This is how much of the lateral grip the brake "spends" — higher = braking
@@ -38,12 +44,19 @@ const FRICTION_CIRCLE = 0.55;
 
 // Cosmetic body lean (visual only — the physics body never tips).
 const LEAN_RATE = 6;    // how fast the body roll eases toward its target
-const MAX_LEAN = 0.32;  // hard cap on the visual roll (~18°)
+const MAX_LEAN = 0.24;  // hard cap on the visual roll (~14°); real suspension roll adds to it
 
-// Cap on the yaw rate the low-speed lift-off turn assist may induce (rad/s) — it
-// can sharpen a turn but can't spin the car past this. Kept modest so rotation
-// reads as tyre-driven, not a teleported spin (avoids the "disconnected" feel).
-const MAX_ASSIST_YAW = 1.4;
+// Air control: in the air W/S pitch the nose down/up and A/D spin the car, to line
+// up a landing. Gentle: rates ramp in at these accelerations (rad/s²) and cap at
+// AIR_MAX_RATE (rad/s). Releasing the keys leaves the rotation alone.
+const AIR_PITCH_ACCEL = 3.0;
+const AIR_YAW_ACCEL = 3.5;
+const AIR_MAX_RATE = 2.2;
+
+// Chassis contact feel: bouncy, slippery bodywork, so car hits and wall scrapes
+// knock cars apart (bumper-car fun) instead of gluing them together.
+const CHASSIS_RESTITUTION = 0.35;
+const CHASSIS_FRICTION = 0.35;
 
 // Sideways slip speed (m/s) above which a tyre is "sliding" enough to lay a skid mark.
 const SKID_SLIP_SPEED = 1.6;
@@ -107,6 +120,10 @@ export class Car {
   private _stabFwd = new THREE.Vector3();
   private _stabRight = new THREE.Vector3();
   private _stabCorrective = new THREE.Vector3();
+  // airControl() scratch
+  private _airRight = new THREE.Vector3();
+  private _airUp = new THREE.Vector3();
+  private _airW = new THREE.Vector3();
   // syncMeshes() scratch
   private _chassisQuat = new THREE.Quaternion();
   private _leanRoll = new THREE.Quaternion();
@@ -161,8 +178,8 @@ export class Car {
     // setAdditionalMassProperties below (before, the mass was counted twice).
     const colliderDesc = R.ColliderDesc.cuboid(spec.halfWidth, spec.halfHeight, spec.halfLength)
       .setDensity(0)
-      .setFriction(0.5)
-      .setRestitution(0.1);
+      .setFriction(CHASSIS_FRICTION)
+      .setRestitution(CHASSIS_RESTITUTION);
     this.collider = physics.world.createCollider(colliderDesc, this.body);
 
     // Centre of mass + inertia define how easily the car rolls in a turn.
@@ -548,6 +565,7 @@ export class Car {
   update(controls: { throttle: number; brake: number; steer: number; handbrake: boolean }, dt: number) {
     const spec = this.spec;
     this.updateSurfaces();
+    const airborne = this.isAirborne(); // wheel contacts from the last step
 
     // Velocity decomposed into the car's own axes.
     const vel = this.body.linvel();
@@ -597,18 +615,9 @@ export class Car {
     // rear so the car rotates further into the turn — present across the range.
     const liftoff = coasting && controls.steer !== 0 && speed > 2 ? spec.liftoffOversteer : 0;
 
-    // Lift-off turn assist (LOW speed): on that same release, gently angle the tail
-    // to help point the nose — extra rotation into the turn for tight, controllable
-    // low-speed handling, where grip alone is too weak to rotate the car. Strongest
-    // just off idle, fades to nothing at top speed, and is capped so it can sharpen
-    // a turn without spinning out.
-    if (coasting && controls.steer !== 0 && speed > 0.3) {
-      const av = this.body.angvel();
-      let y = av.y + controls.steer * spec.liftoffYaw * (1 - speedFrac) * dt;
-      y = THREE.MathUtils.clamp(y, -MAX_ASSIST_YAW, MAX_ASSIST_YAW);
-      const rv = this._rv3; rv.x = av.x; rv.y = y; rv.z = av.z;
-      this.body.setAngvel(rv, true);
-    }
+    // Air control. (The old forced lift-off spin is gone: on the ground the car now
+    // rotates only through its tyres, via lift-off, power and handbrake oversteer.)
+    if (airborne) this.airControl(controls, dt);
 
     // Cosmetic body roll: the chassis visibly leans with the slide so you can see
     // its weight shifting. Physics stays upright (no tipping) — this only drives
@@ -706,7 +715,7 @@ export class Car {
     // lockup → a skidding tyre loses lateral grip (front lock = understeer,
     // rear lock = the tail slides; the handbrake always locks the rear)
     frontSide *= THREE.MathUtils.lerp(1, spec.lockupGrip, frontLock);
-    backSide *= THREE.MathUtils.lerp(1, spec.lockupGrip, rearLock);
+    backSide *= THREE.MathUtils.lerp(1, handbraking ? spec.handbrakeGrip : spec.lockupGrip, rearLock);
     // lift-off oversteer → rear lets go a little, front bites a little more, so
     // releasing the throttle while turning rotates the car harder into the corner
     frontSide *= 1 + 0.3 * liftoff;
@@ -717,6 +726,13 @@ export class Car {
     const cornerDemand = Math.abs(controls.steer) * speedFrac;
     const tailSlipFactor = spec.tailSlip * (1 - 0.7 * controls.throttle);
     backSide *= 1 - tailSlipFactor * cornerDemand;
+    // power oversteer → throttle mid-corner spins the driven rear tyres, which gives
+    // up side grip: the tail steps out and the throttle steers the car (more on dirt).
+    const rearDriveShare = spec.driveBias.back / Math.max(1e-6, spec.driveBias.front + spec.driveBias.back);
+    const rearSurfGrip = (this.wheelSurface[2].grip + this.wheelSurface[3].grip) * 0.5;
+    backSide *= 1 - powerOversteer(
+      spec.powerOversteer, controls.throttle, Math.abs(controls.steer), speed, rearDriveShare, rearSurfGrip
+    );
     // surface grip → loose ground (dirt) cuts lateral grip per axle (tarmac = 1):
     // the car bites on the road, runs wide and drifts easily on the terrain.
     frontSide *= (this.wheelSurface[0].grip + this.wheelSurface[1].grip) * 0.5;
@@ -842,6 +858,28 @@ export class Car {
   }
 
   /**
+   * Gentle air control while no wheel touches the ground: W/S pitch the nose
+   * down/up, A/D spin the car about its own up axis. It only steers the angular
+   * rate toward a capped target (airControlRate), so it shapes a jump without
+   * overriding the physics; released keys leave the rotation untouched.
+   */
+  private airControl(controls: { throttle: number; brake: number; steer: number }, dt: number) {
+    const r = this.body.rotation();
+    const q = this.rotScratch.set(r.x, r.y, r.z, r.w);
+    const right = this._airRight.set(1, 0, 0).applyQuaternion(q); // +rate = nose down
+    const up = this._airUp.set(0, 1, 0).applyQuaternion(q);       // +rate = nose toward +X (screen left)
+    const av = this.body.angvel();
+    const w = this._airW.set(av.x, av.y, av.z);
+    const pitch = w.dot(right);
+    const yaw = w.dot(up);
+    const pitchIn = controls.throttle - controls.brake;
+    w.addScaledVector(right, airControlRate(pitch, pitchIn, AIR_PITCH_ACCEL, AIR_MAX_RATE, dt) - pitch);
+    w.addScaledVector(up, airControlRate(yaw, -controls.steer, AIR_YAW_ACCEL, AIR_MAX_RATE, dt) - yaw);
+    const rv = this._rv3; rv.x = w.x; rv.y = w.y; rv.z = w.z;
+    this.body.setAngvel(rv, true);
+  }
+
+  /**
    * Grounded anti-roll / anti-pitch stabilizer. While wheels are touching the
    * surface, gently torque the car so its "up" axis aligns with the ground's
    * normal — this stops it tipping over in turns, lifting the nose under
@@ -876,7 +914,11 @@ export class Car {
     const av = this.body.angvel();
     const w = this._stabW.set(av.x, av.y, av.z);
     const tiltRate = w.dot(axis);
-    const accelMag = (UPRIGHT_STIFFNESS * angle - UPRIGHT_DAMPING * tiltRate) * (grounded / 4);
+    // Small tilts are left to the suspension (lively pitch/roll); the stabilizer
+    // only ramps in past TILT_FREE, where the car would really start to tip.
+    const assist = tiltAssist(angle, TILT_FREE);
+    if (assist === 0) return;
+    const accelMag = (UPRIGHT_STIFFNESS * angle - UPRIGHT_DAMPING * tiltRate) * assist * (grounded / 4);
     // axis is now the corrective direction (multiplied in-place)
     axis.multiplyScalar(accelMag);
 

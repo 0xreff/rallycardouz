@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { clamp, nextImpact, creepTopEndCap, speedFraction, avoidanceControl, shouldHoldHandbrake } from "./handling";
+import {
+  clamp, nextImpact, creepTopEndCap, speedFraction, avoidanceControl, shouldHoldHandbrake,
+  powerOversteer, airControlRate, tiltAssist,
+} from "./handling";
 
 describe("shouldHoldHandbrake", () => {
   it.each([0, 0.0005, 0.1, 0.15])("holds residual horizontal speed %s", (speed) => {
@@ -91,6 +94,62 @@ describe("speedFraction", () => {
 
   it("uses absolute speed (reverse counts)", () => {
     expect(speedFraction(-15.6, 26, 0.2)).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe("powerOversteer", () => {
+  it("is zero standing still, driving straight or off throttle", () => {
+    expect(powerOversteer(0.6, 1, 1, 0, 0.65, 1)).toBe(0);
+    expect(powerOversteer(0.6, 1, 0, 20, 0.65, 1)).toBe(0);
+    expect(powerOversteer(0.6, 0, 1, 20, 0.65, 1)).toBe(0);
+  });
+
+  it("grows with rear drive and on loose ground", () => {
+    const awd = powerOversteer(0.6, 1, 1, 20, 0.5, 1);
+    expect(powerOversteer(0.6, 1, 1, 20, 1, 1)).toBeGreaterThan(awd);
+    expect(powerOversteer(0.6, 1, 1, 20, 0.5, 0.6)).toBeGreaterThan(awd);
+  });
+
+  it("never removes all rear grip", () => {
+    expect(powerOversteer(5, 1, 1, 30, 1, 0)).toBe(0.9);
+  });
+});
+
+describe("airControlRate", () => {
+  const dt = 1 / 60;
+
+  it("leaves the rate alone with no input", () => {
+    expect(airControlRate(1.3, 0, 3, 2, dt)).toBe(1.3);
+  });
+
+  it("ramps toward input x maxRate by at most accel*dt per step", () => {
+    expect(airControlRate(0, 1, 3, 2, dt)).toBeCloseTo(3 * dt, 6);
+    expect(airControlRate(0, -1, 3, 2, dt)).toBeCloseTo(-3 * dt, 6);
+  });
+
+  it("settles at the cap", () => {
+    let r = 0;
+    for (let i = 0; i < 600; i++) r = airControlRate(r, 1, 3, 2, dt);
+    expect(r).toBeCloseTo(2, 6);
+  });
+});
+
+describe("tiltAssist", () => {
+  it("is 0 inside the free zone and 1 from twice it", () => {
+    expect(tiltAssist(0, 0.14)).toBe(0);
+    expect(tiltAssist(0.14, 0.14)).toBe(0);
+    expect(tiltAssist(0.28, 0.14)).toBe(1);
+    expect(tiltAssist(1, 0.14)).toBe(1);
+  });
+
+  it("ramps smoothly in between", () => {
+    const a = tiltAssist(0.21, 0.14);
+    expect(a).toBeGreaterThan(0);
+    expect(a).toBeLessThan(1);
+  });
+
+  it("is always on with no free zone", () => {
+    expect(tiltAssist(0, 0)).toBe(1);
   });
 });
 

@@ -157,8 +157,10 @@ export class Car {
       .setCanSleep(false);
     this.body = physics.world.createRigidBody(bodyDesc);
 
+    // Density 0: the collider only shapes contacts. Mass + inertia come solely from
+    // setAdditionalMassProperties below (before, the mass was counted twice).
     const colliderDesc = R.ColliderDesc.cuboid(spec.halfWidth, spec.halfHeight, spec.halfLength)
-      .setMass(spec.mass)
+      .setDensity(0)
       .setFriction(0.5)
       .setRestitution(0.1);
     this.collider = physics.world.createCollider(colliderDesc, this.body);
@@ -198,6 +200,9 @@ export class Car {
     }
     for (let i = 0; i < 4; i++) {
       this.controller.setWheelSuspensionStiffness(i, spec.suspensionStiffness);
+      // Rapier caps each wheel at 6000 N by default: far too low for a real 2 t car
+      // landing a jump (it would bottom out). Scale the cap with mass.
+      this.controller.setWheelMaxSuspensionForce(i, spec.mass * Physics.GRAVITY * 6);
       this.controller.setWheelMaxSuspensionTravel(i, spec.suspensionTravel);
       this.controller.setWheelSuspensionCompression(i, spec.suspensionCompression);
       this.controller.setWheelSuspensionRelaxation(i, spec.suspensionRelaxation);
@@ -237,6 +242,9 @@ export class Car {
 
       loader.load(glbPath, (gltf) => {
         const model = gltf.scene;
+        // Preferred: fit the model to the physics wheels. Falls back to the
+        // bounding-box fit below when the model has no separate wheel nodes.
+        if (this.fitModelToPhysics(root, model, spec)) return;
 
         // Calculate current bounding box
         // Models loaded via spec.modelFile use an exact (per-vertex) bounding box. The
@@ -277,7 +285,9 @@ export class Car {
 
         // Ground alignment: push the car down so the visual tires hit the physics floor
         const connY = -spec.halfHeight + 0.04;
-        const physicsBottom = connY - spec.suspensionRest - spec.wheelRadius;
+        // Ride height at rest includes the static sag (g / 4k per wheel, capped by travel).
+        const sag = Math.min(Physics.GRAVITY / (4 * spec.suspensionStiffness), spec.suspensionTravel);
+        const physicsBottom = connY - (spec.suspensionRest - sag) - spec.wheelRadius;
         const visualBottom = - (size.y * scale) / 2;
         model.position.y += (physicsBottom - visualBottom) + (spec.visualYOffset ?? 0);
 
@@ -401,6 +411,97 @@ export class Car {
     };
     visit(model);
     return out;
+  }
+
+  /**
+   * Fit a loaded .glb TO the physics car, never the other way round: physics stays
+   * pure data (CarSpec), so a headless multiplayer server that never loads models
+   * simulates exactly the same car. The model's own wheels are the anchors:
+   *  1. scale so the model wheelbase equals the physics wheelbase,
+   *  2. shift so its wheel centres sit on the physics wheel centres at static ride height,
+   *  3. rescale the model tyres to spec.wheelRadius (no floating / sunken tyres).
+   * visualYOffset / visualZOffset remain as small manual nudges on top.
+   * Returns false when 4 wheel nodes aren't found (caller uses the bounding-box fit).
+   */
+  private fitModelToPhysics(root: THREE.Object3D, model: THREE.Object3D, spec: CarSpec): boolean {
+    const wheels = this.findNodes(model, /wheel|tyre|tire/i, /brake|caliper|rotor/i);
+    if (wheels.length !== 4) return false;
+
+    // Measure in the car's own frame: park the root at the origin. syncMeshes()
+    // re-poses it from physics before the next render.
+    root.position.set(0, 0, 0);
+    root.quaternion.identity();
+    if (spec.visualRotationY) model.rotation.y = spec.visualRotationY;
+    root.add(model);
+
+    const box = new THREE.Box3();
+    const size = new THREE.Vector3();
+    const measure = () => {
+      root.updateMatrixWorld(true);
+      const centres = wheels.map((w) => {
+        box.setFromObject(w, true);
+        box.getSize(size);
+        return { c: box.getCenter(new THREE.Vector3()), r: Math.max(size.y, size.z) / 2 };
+      });
+      centres.sort((a, b) => b.c.z - a.c.z); // [0,1] front axle, [2,3] rear axle
+      const avg = (k: "x" | "y") => centres.reduce((s, w) => s + w.c[k], 0) / 4;
+      return {
+        front: (centres[0].c.z + centres[1].c.z) / 2,
+        rear: (centres[2].c.z + centres[3].c.z) / 2,
+        x: avg("x"),
+        y: avg("y"),
+        radius: centres.reduce((s, w) => s + w.r, 0) / 4,
+      };
+    };
+
+    // Physics wheel centres (same maths as the constructor).
+    const connY = -spec.halfHeight + 0.04;
+    const zFront = spec.halfLength - (spec.wheelZInsetFront ?? spec.wheelZInset ?? 0.25);
+    const zRear = spec.halfLength - (spec.wheelZInsetRear ?? spec.wheelZInset ?? 0.25);
+    const sag = Math.min(Physics.GRAVITY / (4 * spec.suspensionStiffness), spec.suspensionTravel);
+    const wheelY = connY - (spec.suspensionRest - sag);
+
+    let m = measure();
+    const modelWheelbase = m.front - m.rear;
+    if (modelWheelbase < 1e-3) return false;
+    model.scale.multiplyScalar((zFront + zRear) / modelWheelbase);
+    m = measure();
+    model.position.x -= m.x;
+    model.position.y += wheelY - m.y + (spec.visualYOffset ?? 0);
+    model.position.z += (zFront - zRear) / 2 - (m.front + m.rear) / 2 + (spec.visualZOffset ?? 0);
+    m = measure();
+
+    model.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      const oldMat = mesh.material as THREE.MeshStandardMaterial;
+      if (oldMat && oldMat.isMeshStandardMaterial) {
+        const newMat = createRimMaterial({ color: oldMat.color, metalness: 0.15, roughness: 0.6 });
+        newMat.map = oldMat.map;
+        newMat.normalMap = oldMat.normalMap;
+        newMat.roughnessMap = oldMat.roughnessMap;
+        newMat.metalnessMap = oldMat.metalnessMap;
+        mesh.material = newMat;
+      }
+    });
+
+    if (import.meta.env.DEV) {
+      const body = new THREE.Box3().setFromObject(model, true).getSize(new THREE.Vector3());
+      console.info(
+        `[CarSpec ${spec.name}] fitted model ${body.x.toFixed(2)} x ${body.y.toFixed(2)} x ${body.z.toFixed(2)} m ` +
+        `(collider ${(2 * spec.halfWidth).toFixed(2)} x ${(2 * spec.halfHeight).toFixed(2)} x ${(2 * spec.halfLength).toFixed(2)} m). ` +
+        `For a matching hitbox try halfWidth ~${(body.x / 2).toFixed(2)}, halfLength ~${(body.z / 2).toFixed(2)}. ` +
+        `Model tyre radius ${m.radius.toFixed(3)} m rescaled to wheelRadius ${spec.wheelRadius}.`
+      );
+    }
+
+    this.bindModelWheels(root, model);
+    const k = m.radius > 1e-3 ? spec.wheelRadius / m.radius : 1;
+    for (const p of this.modelWheels) p?.scale.setScalar(k);
+    for (const p of this.modelBrakes) p?.scale.setScalar(k);
+    return true;
   }
 
   private buildProceduralChassis(spec: CarSpec): THREE.Object3D {

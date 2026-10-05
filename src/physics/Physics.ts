@@ -25,9 +25,12 @@ export class Physics {
     this.world.timestep = Physics.FIXED_DT;
   }
 
-  static async create(gravity = { x: 0, y: -9.81 * 2.2, z: 0 }): Promise<Physics> {
-    // Gravity is scaled up (2.2x) to give the lightweight RC cars that snappy,
-    // toy-like fall that defines the reference game's feel.
+  /** World gravity (m/s²). Cars are real-scale (metres, kg), so 9.81 is physically
+   *  real. Multiply slightly (e.g. 9.81 * 1.2) for snappier, shorter jumps. Car.ts
+   *  reads this for ride-height maths, so change it here only. */
+  static readonly GRAVITY = 9.81;
+
+  static async create(gravity = { x: 0, y: -Physics.GRAVITY, z: 0 }): Promise<Physics> {
     await RAPIER.init();
     const world = new RAPIER.World(gravity);
     return new Physics(world);

@@ -35,7 +35,10 @@ const UPRIGHT_STIFFNESS = 26; // how hard the car springs back to level
 const UPRIGHT_DAMPING = 7;    // damps the tilt rate so it doesn't oscillate
 // Tilt (rad, ~8°) the stabilizer leaves alone, so the suspension can visibly pitch
 // and roll the body. It ramps in smoothly beyond this to stop real flips.
-const TILT_FREE = 0.14;
+const TILT_FREE = 0.1;
+// Share of the tilt-rate damping that stays on inside the free zone: the body
+// still moves on its springs, but settles with weight instead of rocking.
+const TILT_DAMP_MIN = 0.35;
 
 // Friction-circle coupling: a tyre's grip is shared between turning and braking.
 // This is how much of the lateral grip the brake "spends" — higher = braking
@@ -55,8 +58,8 @@ const AIR_MAX_RATE = 2.2;
 
 // Chassis contact feel: bouncy, slippery bodywork, so car hits and wall scrapes
 // knock cars apart (bumper-car fun) instead of gluing them together.
-const CHASSIS_RESTITUTION = 0.35;
-const CHASSIS_FRICTION = 0.35;
+const CHASSIS_RESTITUTION = 0.12; // hits shove cars apart without launching them
+const CHASSIS_FRICTION = 0.4;
 
 // Sideways slip speed (m/s) above which a tyre is "sliding" enough to lay a skid mark.
 const SKID_SLIP_SPEED = 1.6;
@@ -914,11 +917,12 @@ export class Car {
     const av = this.body.angvel();
     const w = this._stabW.set(av.x, av.y, av.z);
     const tiltRate = w.dot(axis);
-    // Small tilts are left to the suspension (lively pitch/roll); the stabilizer
-    // only ramps in past TILT_FREE, where the car would really start to tip.
+    // Small tilts are left to the suspension (visible pitch/roll): the levelling
+    // spring only ramps in past TILT_FREE, where the car would really start to tip.
+    // Part of the tilt-rate damping always stays on so the body never rocks freely.
     const assist = tiltAssist(angle, TILT_FREE);
-    if (assist === 0) return;
-    const accelMag = (UPRIGHT_STIFFNESS * angle - UPRIGHT_DAMPING * tiltRate) * assist * (grounded / 4);
+    const damp = TILT_DAMP_MIN + (1 - TILT_DAMP_MIN) * assist;
+    const accelMag = (UPRIGHT_STIFFNESS * angle * assist - UPRIGHT_DAMPING * tiltRate * damp) * (grounded / 4);
     // axis is now the corrective direction (multiplied in-place)
     axis.multiplyScalar(accelMag);
 

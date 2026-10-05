@@ -25,10 +25,12 @@ export class Physics {
     this.world.timestep = Physics.FIXED_DT;
   }
 
-  /** World gravity (m/s²). Cars are real-scale (metres, kg), so 9.81 is physically
-   *  real. Multiply slightly (e.g. 9.81 * 1.2) for snappier, shorter jumps. Car.ts
-   *  reads this for ride-height maths, so change it here only. */
-  static readonly GRAVITY = 9.81;
+  /** World gravity (m/s²). Cars are real-scale (metres, kg); the 1.6 arcade weight
+   *  factor makes them feel heavy and planted (short, punchy jumps, firm landings).
+   *  Car.ts reads this for ride-height maths and CarSpec suspension is tuned for it,
+   *  so change it here only (and retune suspensionStiffness if you do). */
+  static readonly ARCADE_WEIGHT = 1.6;
+  static readonly GRAVITY = 9.81 * Physics.ARCADE_WEIGHT;
 
   static async create(gravity = { x: 0, y: -Physics.GRAVITY, z: 0 }): Promise<Physics> {
     await RAPIER.init();

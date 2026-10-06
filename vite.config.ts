@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { resolve } from "path";
 
 // Rapier ships a .wasm file; Vite handles it as an asset automatically.
 // We exclude it from dep-optimization so the wasm loads correctly in dev.
@@ -7,5 +8,13 @@ export default defineConfig({
   base: "./",
   server: { host: true, port: 5173 },
   optimizeDeps: { exclude: ["@dimforge/rapier3d-compat"] },
-  build: { target: "es2022" },
+  build: {
+    target: "es2022",
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        desert: resolve(__dirname, "desert/index.html"),
+      },
+    },
+  },
 });

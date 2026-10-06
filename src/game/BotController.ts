@@ -12,8 +12,10 @@ const UP = new THREE.Vector3(0, 1, 0);
  * and steering toward the most open side, easing off the throttle when something
  * is close. If it gets pinned, it backs up and turns to free itself.
  *
- * It produces a ControlState each frame, exactly like keyboard Input, so the bot
- * drives a normal Car with no special-casing in the physics.
+ * It produces a ControlState each step, exactly like keyboard Input, so the bot
+ * drives a normal Car with no special-casing in the physics. The returned object
+ * is reused (the caller consumes it immediately), and all vectors are scratch
+ * fields, so sampling allocates nothing per frame.
  */
 export class BotController {
   private wander = 0;       // smoothed wander steer
@@ -24,32 +26,45 @@ export class BotController {
   private reverseDir = 1;
   private _rayDir = new THREE.Vector3();
   private _ray: any = null; // RAPIER.Ray
+  private _pos = new THREE.Vector3();
+  private _fwd = new THREE.Vector3();
+  private _vel = new THREE.Vector3();
+  private _origin = new THREE.Vector3();
+  private _left = new THREE.Vector3();
+  private _right = new THREE.Vector3();
+  private out: ControlState = {
+    throttle: 0,
+    brake: 0,
+    steer: 0,
+    handbrake: false,
+    unlockSixth: true, // bots take 6th on their own when they reach the limiter
+    reset: false,
+    recover: false,
+    cycleCar: false,
+    changeView: false,
+    lookLeft: false,
+    lookRight: false,
+  };
 
   constructor(private physics: Physics, private car: Car) {}
 
   sample(dt: number): ControlState {
-    const idle = {
-      throttle: 0,
-      brake: 0,
-      steer: 0,
-      handbrake: false,
-      reset: false,
-      recover: false,
-      cycleCar: false,
-      changeView: false,
-      lookLeft: false,
-      lookRight: false,
-    };
+    const out = this.out;
+    out.throttle = 0;
+    out.brake = 0;
+    out.steer = 0;
 
-    const pos = this.car.position();
-    const fwd = this.car.forwardVector();
-    const vel = this.car.velocity();
+    const pos = this.car.position(this._pos);
+    const fwd = this.car.forwardVector(this._fwd);
+    const vel = this.car.velocity(this._vel);
     const speed = vel.dot(fwd);
 
     // --- Stuck recovery: pinned for a while → back up and turn out. ---
     if (this.reverseTimer > 0) {
       this.reverseTimer -= dt;
-      return { ...idle, brake: 1, steer: this.reverseDir };
+      out.brake = 1;
+      out.steer = this.reverseDir;
+      return out;
     }
     if (Math.abs(speed) < 0.6) {
       this.stuckTime += dt;
@@ -72,19 +87,20 @@ export class BotController {
 
     // --- Obstacle avoidance: three rays ahead, look further the faster we go. ---
     const look = THREE.MathUtils.clamp(Math.abs(speed) * 0.6 + 6, 6, 18);
-    const origin = pos.clone().addScaledVector(fwd, 1.2); // just ahead of the nose
-    const right = fwd.clone().applyAxisAngle(UP, 0.45); // +angle = car's right side
-    const left = fwd.clone().applyAxisAngle(UP, -0.45);
+    const origin = this._origin.copy(pos).addScaledVector(fwd, 1.2); // just ahead of the nose
+    const right = this._right.copy(fwd).applyAxisAngle(UP, 0.45); // +angle = car's right side
+    const left = this._left.copy(fwd).applyAxisAngle(UP, -0.45);
     const dC = this.cast(origin, fwd, look);
     const dR = this.cast(origin, right, look);
     const dL = this.cast(origin, left, look);
 
-    const { steer, throttle } = avoidanceControl(dC, dL, dR, look, this.wander);
-
-    return { ...idle, throttle, steer };
+    const c = avoidanceControl(dC, dL, dR, look, this.wander);
+    out.throttle = c.throttle;
+    out.steer = c.steer;
+    return out;
   }
 
-  /** Distance to the nearest obstacle along `dir` (normalised), or `look` if clear. */
+  /** Distance to the nearest obstacle along dir (normalised), or look if clear. */
   private cast(origin: THREE.Vector3, dir: THREE.Vector3, look: number): number {
     this._rayDir.copy(dir).normalize();
     if (!this._ray) {

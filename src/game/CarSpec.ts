@@ -36,7 +36,7 @@ export interface CarSpec {
   maxBrake: number;      // m/s² foot-brake deceleration
   handbrake: number;     // m/s² handbrake deceleration (low = long rally slides)
   driveBias: { front: number; back: number }; // 0..1 force multiplier per axle (FWD/RWD/AWD)
-  topSpeed: number;      // m/s, the limit full power pulls you to
+  topSpeed: number;      // m/s, the limit full power pulls you to in 6th (1st-5th stop at gearbox FIFTH_TOP)
   launchSpeed: number;   // m/s by which off-the-line boost fades
   launchBoost: number;   // extra fraction of engine force when launching straight
   overspeed: number;     // fraction above topSpeed the car slowly climbs to (the real max)
@@ -186,7 +186,7 @@ export const CARS: Record<string, CarSpec> = {
     linearDamping: 0.1, angularDamping: 0.45,
     engineAccel: 16, reverseAccel: 6.5, maxBrake: 22, handbrake: 4.5,
     driveBias: { front: 0.7, back: 0.9 },
-    topSpeed: 26, launchSpeed: 9, launchBoost: 0.7,
+    topSpeed: 46, launchSpeed: 9, launchBoost: 0.7,
     overspeed: 0.2, overspeedAccel: 0.8,
     maxSteer: 0.62, steerRate: 13, turnSlowdown: 0.08, engineRate: 13,
     slipThreshold: 2.8, kineticGripRatio: 0.62,
@@ -211,7 +211,7 @@ export const CARS: Record<string, CarSpec> = {
     linearDamping: 0.08, angularDamping: 0.4,
     engineAccel: 18, reverseAccel: 7, maxBrake: 22, handbrake: 4,
     driveBias: { front: 0.5, back: 1.0 },
-    topSpeed: 32, launchSpeed: 10, launchBoost: 0.8,
+    topSpeed: 52, launchSpeed: 10, launchBoost: 0.8,
     overspeed: 0.2, overspeedAccel: 1.0,
     maxSteer: 0.66, steerRate: 14, turnSlowdown: 0.08, engineRate: 14,
     slipThreshold: 2.0, kineticGripRatio: 0.58,
@@ -237,7 +237,7 @@ export const CARS: Record<string, CarSpec> = {
     linearDamping: 0.12, angularDamping: 0.65,
     engineAccel: 12, reverseAccel: 5.5, maxBrake: 22, handbrake: 5,
     driveBias: { front: 1.0, back: 1.0 },
-    topSpeed: 22, launchSpeed: 8, launchBoost: 0.55,
+    topSpeed: 42, launchSpeed: 8, launchBoost: 0.55,
     overspeed: 0.2, overspeedAccel: 0.5,
     maxSteer: 0.56, steerRate: 10, turnSlowdown: 0.12, engineRate: 10,
     slipThreshold: 3.0, kineticGripRatio: 0.7,
@@ -264,7 +264,7 @@ export const CARS: Record<string, CarSpec> = {
     mass: 2400,
     comOffset: { x: 0, y: -0.38, z: 0.05 },
     engineAccel: 14, maxBrake: 22, handbrake: 5,
-    topSpeed: 38,
+    topSpeed: 44,
     tailSlip: 0.05, weightTransfer: 0.15, powerOversteer: 0.6,
     visualRotationY: Math.PI,
     wheelZInsetFront: 1.125, wheelZInsetRear: 1.125, // ~3.55 m wheelbase

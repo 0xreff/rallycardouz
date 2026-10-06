@@ -12,6 +12,7 @@ import {
   nextImpact, creepTopEndCap, speedFraction as computeSpeedFraction, shouldHoldHandbrake,
   powerOversteer, airAttitudeRate, tiltAssist,
 } from "./handling";
+import { createGearbox, stepGearbox, driveMultiplier, speedCap, sixthReady, type GearboxState } from "./gearbox";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CarSpec } from "./CarSpec";
 
@@ -100,6 +101,7 @@ export class Car {
   private surfaceRay: RAPIER.Ray | null = null;      // reused downward probe (lazy — needs runtime Rapier)
   private burningOut = false; // throttle + brake/handbrake held stationary → burnout
   private burnoutSpin = 0;    // accumulated visual wheelspin for the driven wheels
+  private gearbox = createGearbox(); // gear / rpm / shift + 6th-kick timers (see gearbox.ts)
   private fx: CarFX;          // sparks / skid marks / smoke / dust emitter
   private rotScratch = new THREE.Quaternion(); // reused for forward/right vector reads
   private physics: Physics;
@@ -568,7 +570,10 @@ export class Car {
     }
   }
 
-  update(controls: { throttle: number; brake: number; steer: number; handbrake: boolean }, dt: number) {
+  update(
+    controls: { throttle: number; brake: number; steer: number; handbrake: boolean; unlockSixth?: boolean },
+    dt: number
+  ) {
     const spec = this.spec;
     this.updateSurfaces();
     const airborne = this.isAirborne(); // wheel contacts from the last step
@@ -665,15 +670,21 @@ export class Car {
 
     // Engine / reverse. Full power pulls the car up to the current top-speed cap
     // (which starts at topSpeed and creeps to vMax above) and holds it there.
+    // Gearbox: 1-5 shift automatically, 5th holds the car on the FIFTH_TOP limiter
+    // until the player holds T, which engages 6th with a power kick and opens the
+    // full top speed (topEndCap, which keeps its slow overspeed creep).
+    stepGearbox(this.gearbox, speed, spec.topSpeed, !!controls.unlockSixth, dt);
+    const speedLimit = speedCap(this.gearbox, this.topEndCap);
+
     let engine = 0;
     if (controls.throttle > 0) {
-      if (speed < this.topEndCap) {
+      if (speed < speedLimit) {
         const steerAmount = Math.abs(controls.steer);
         const turnFactor = 1 - steerAmount * spec.turnSlowdown; // ease off in corners
         const straightness = 1 - steerAmount;
         const lowSpeed = 1 - Math.min(Math.max(speed, 0) / spec.launchSpeed, 1);
         const boost = 1 + spec.launchBoost * straightness * lowSpeed; // fading launch punch
-        engine = spec.engineForce * controls.throttle * turnFactor * boost;
+        engine = spec.engineForce * controls.throttle * turnFactor * boost * driveMultiplier(this.gearbox);
       }
     } else if (!handbraking && controls.brake > 0 && speed <= 0.4) {
       engine = -spec.reverseForce * controls.brake; // reverse once stopped
@@ -1121,12 +1132,25 @@ export class Car {
     return computeSpeedFraction(s, this.spec.topSpeed, this.spec.overspeed);
   }
 
+  /** Live gearbox state (gear 1..6, rpm, timers) for the HUD / network sync. Read-only. */
+  gearState(): Readonly<GearboxState> {
+    return this.gearbox;
+  }
+
+  /** True when holding T would engage 6th gear right now (5th, on the limiter). */
+  canUnlockSixth(): boolean {
+    const v = this.body.linvel();
+    const f = this.forwardVector(this._speedFwd);
+    return sixthReady(this.gearbox, f.x * v.x + f.y * v.y + f.z * v.z);
+  }
+
   /** 0..1 collision / hard-landing intensity for camera shake. */
   impactLevel(): number {
     return this.impact;
   }
 
   reset() {
+    this.gearbox = createGearbox();
     this.body.setTranslation(this.spawnPos, true);
     this.body.setRotation(this.spawnRot, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -1187,6 +1211,7 @@ export class Car {
     const upright = this._recoverQ.setFromEuler(this._recoverEuler.set(0, yaw, 0));
 
     const t = this.body.translation();
+    this.gearbox = createGearbox();
     this.body.setTranslation({ x: t.x, y: t.y + 0.6, z: t.z }, true);
     this.body.setRotation(upright, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);

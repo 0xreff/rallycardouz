@@ -7,6 +7,7 @@ export interface ControlState {
   brake: number;    // 0..1 reverse/brake
   steer: number;    // -1 (left) .. 1 (right)
   handbrake: boolean;
+  unlockSixth: boolean; // held T: engages 6th gear while on the 5th-gear limiter
   reset: boolean;
   recover: boolean;   // flip the car back onto its wheels in place
   cycleCar: boolean;  // switch to the next car in the roster
@@ -65,6 +66,10 @@ export class Input {
     const lookLeft = this.has("q");
     const lookRight = this.has("e");
 
-    return { throttle, brake, steer, handbrake: this.has(" "), reset, recover, cycleCar, changeView, lookLeft, lookRight };
+    // T is a held key (not edge-triggered) so a quick tap can't fall between two
+    // physics substeps and get lost.
+    const unlockSixth = this.has("t");
+
+    return { throttle, brake, steer, handbrake: this.has(" "), unlockSixth, reset, recover, cycleCar, changeView, lookLeft, lookRight };
   }
 }

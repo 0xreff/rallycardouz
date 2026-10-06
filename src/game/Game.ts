@@ -16,6 +16,7 @@ import { Car } from "./Car";
 import { CARS, DEFAULT_CAR } from "./CarSpec";
 import { Track } from "./Track";
 import { BotController } from "./BotController";
+import { rpmFraction } from "./gearbox";
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
@@ -39,6 +40,12 @@ export class Game {
   private speedEl: HTMLElement;
   private carNameEl: HTMLElement | null;
   private lastDisplayedSpeed = -1;
+  private gearEl: HTMLElement | null;
+  private rpmEl: HTMLElement | null;
+  private gearHintEl: HTMLElement | null;
+  private lastGear = "";
+  private lastRpmPct = -1;
+  private lastHint = -1;
 
   // Pre-allocated scratch objects — eliminates per-frame Vector3 / object allocations.
   private _pos = new THREE.Vector3();
@@ -105,6 +112,9 @@ export class Game {
     this.composer.addPass(new SMAAPass(window.innerWidth * pr, window.innerHeight * pr));
 
     this.speedEl = document.querySelector("#speed .val")!;
+    this.gearEl = document.querySelector("#gear");
+    this.rpmEl = document.querySelector("#rpmBar");
+    this.gearHintEl = document.querySelector("#gearHint");
 
     window.addEventListener("resize", () => this.onResize());
   }
@@ -150,6 +160,9 @@ export class Game {
     this.car = new Car(this.physics, this.scene, this.track.spawn, spec, this.skids, this.sparks, this.smoke, this.dust, this.track.surfaces);
     if (this.carNameEl) this.carNameEl.textContent = spec.name;
     this.lastDisplayedSpeed = -1; // force HUD refresh for the new car
+    this.lastGear = "";
+    this.lastRpmPct = -1;
+    this.lastHint = -1;
 
     // Snap the camera behind the new car immediately so it doesn't sweep across the map.
     if (this.chase) {
@@ -249,6 +262,26 @@ export class Game {
       if (kmh !== this.lastDisplayedSpeed) {
         this.speedEl.textContent = String(kmh);
         this.lastDisplayedSpeed = kmh;
+      }
+
+      // HUD gearbox: gear (R when reversing), RPM bar and the 6th-gear prompt.
+      // Same rule as the speed: only touch the DOM when a value changes.
+      const gb = this.car.gearState();
+      const gearTxt = ct.velocity.dot(ct.forward) < -0.5 ? "R" : String(gb.gear);
+      if (gearTxt !== this.lastGear && this.gearEl) {
+        this.gearEl.textContent = gearTxt;
+        this.lastGear = gearTxt;
+      }
+      const rpmPct = Math.round(rpmFraction(gb.rpm) * 100);
+      if (rpmPct !== this.lastRpmPct && this.rpmEl) {
+        this.rpmEl.style.width = `${rpmPct}%`;
+        this.lastRpmPct = rpmPct;
+      }
+      const hint = gb.boostTimer > 0 ? 2 : this.car.canUnlockSixth() ? 1 : 0;
+      if (hint !== this.lastHint && this.gearHintEl) {
+        this.gearHintEl.textContent = hint === 2 ? "6TH UNLOCKED!" : hint === 1 ? "HOLD T → 6TH" : "";
+        this.gearHintEl.className = hint === 2 ? "boom" : hint === 1 ? "ready" : "";
+        this.lastHint = hint;
       }
 
       this.composer.render();

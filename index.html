@@ -25,6 +25,18 @@
         background-clip: text; color: transparent; }
       #speed .unit { font-size: 16px; opacity: 0.7; margin-left: 4px; }
 
+      #gearbox {
+        position: absolute; right: 28px; bottom: 112px; width: 190px; text-align: right;
+        text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+      }
+      #gear { font-size: 44px; font-weight: 800; line-height: 1; }
+      #rpm { height: 6px; margin-top: 6px; background: rgba(255,255,255,0.12); border-radius: 3px; overflow: hidden; }
+      #rpmBar { height: 100%; width: 0%; background: linear-gradient(90deg,#6f8fff 0%,#bcd4ff 70%,#ff5a5a 100%); }
+      #gearHint { margin-top: 6px; min-height: 18px; font-size: 14px; font-weight: 800; letter-spacing: 1.5px; }
+      #gearHint.ready { color: #ffd34d; animation: gear-pulse 0.6s ease-in-out infinite alternate; }
+      #gearHint.boom { color: #ff6a3d; font-size: 18px; }
+      @keyframes gear-pulse { from { opacity: 0.45; } to { opacity: 1; } }
+
       #car {
         position: absolute; left: 24px; top: 22px; font-size: 22px; font-weight: 700;
         letter-spacing: 0.5px; text-shadow: 0 2px 10px rgba(0,0,0,0.6);
@@ -221,11 +233,13 @@
     <div id="app"></div>
     <div id="hud">
       <div id="car"><span class="lbl">CAR</span> <span id="carName">—</span></div>
+      <div id="gearbox"><div id="gear">1</div><div id="rpm"><div id="rpmBar"></div></div><div id="gearHint"></div></div>
       <div id="speed"><span class="val">0</span><span class="unit">KM/H</span></div>
       <div id="help">
         <kbd>W</kbd>/<kbd>↑</kbd> accelerate &nbsp; <kbd>S</kbd>/<kbd>↓</kbd> front brake / reverse<br />
         <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer &nbsp; <kbd>Space</kbd> handbrake (slide turns)<br />
-        <kbd>F</kbd> flip upright &nbsp; <kbd>R</kbd> reset to start &nbsp; <kbd>C</kbd> change car &nbsp; <kbd>V</kbd> change view
+        <kbd>F</kbd> flip upright &nbsp; <kbd>R</kbd> reset to start &nbsp; <kbd>C</kbd> change car &nbsp; <kbd>V</kbd> change view<br />
+        <kbd>T</kbd> hold on the 135 km/h limiter to unlock 6th gear
       </div>
     </div>
     <div id="loader">

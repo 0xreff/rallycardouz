@@ -3,17 +3,24 @@ import { clamp } from "./handling";
 /**
  * Arcade 6-speed gearbox. Pure and deterministic: stepGearbox() mutates a small
  * state object and allocates nothing, so it runs inside the fixed 60 Hz physics
- * step and syncs cheaply in multiplayer (4 numbers).
+ * step and syncs cheaply in multiplayer (gear, rpm, shiftTimer, boostTimer, launch, kickTimer).
  *
  *  - Gears 1-5 shift automatically. An upshift takes real time: power is fully cut
  *    (clutch in), the revs fall toward the next gear, then the clutch bites and
  *    power ramps back in. A minimum dwell per gear stops it racing 1st to 5th.
  *  - A standing start is a launch: the revs climb to LAUNCH_RPM with the clutch
  *    slipping, then the clutch drops and the car gets a short kick (wheelspin).
+ *    Once a launch has started it is LATCHED: creeping or rolling at up to
+ *    LAUNCH_ABORT_SPEED does not cancel it (only letting off the throttle does).
  *  - 5th gear tops out at FIFTH_TOP (135 km/h) for every car: the rev limiter.
  *  - 6th is LOCKED. Holding T on the 5th-gear limiter engages it with a short
  *    power kick and opens the car's own full top speed. Dropping back below
  *    SIXTH_RELOCK re-locks it.
+ *
+ * Feel hooks (for camera / body / particles / audio): shiftSeq, shiftDir and
+ * launchSeq are event COUNTERS (compare with the last value you saw, so no event is
+ * lost when a render frame runs 0 or 2 physics steps); kickEnvelope() and
+ * shiftPhase() are continuous signals. Counters are local-only: no need to sync them.
  */
 
 export const GEAR_COUNT = 6;
@@ -40,15 +47,22 @@ export const UNLOCK_READY = 0.95; // fraction of FIFTH_TOP from which T can enga
 export const SIXTH_RELOCK = 0.85; // in 6th, below this fraction of FIFTH_TOP → back to 5th (locked)
 export const BOOST_TIME = 1.5;    // s of the 6th-gear power kick (fades out)
 export const BOOST_FORCE = 1.8;   // engine-force multiplier at the start of the kick
-export const LAUNCH_REV_TIME = 0.32; // s the revs build on the line before the clutch drops
+export const LAUNCH_REV_TIME = 0.45; // s the revs build on the line before the clutch drops (was 0.32)
 export const LAUNCH_RPM = 4800;   // rpm held on the line
-export const LAUNCH_SLIP = 0.08;  // drive multiplier while the clutch slips on the line
+export const LAUNCH_SLIP = 0;     // drive multiplier while the clutch slips on the line (0 = car is held)
 export const LAUNCH_KICK = 0.4;   // extra engine force at the clutch drop (fades out)
 export const LAUNCH_KICK_TIME = 1.0; // s the kick (and the wheelspin revs) fade over
-export const LAUNCH_MAX_SPEED = 1.5; // m/s: a "standing start" is below this
+export const LAUNCH_MAX_SPEED = 1.5; // m/s: a launch can only be ARMED below this
+export const LAUNCH_ABORT_SPEED = 4.0; // m/s: once armed, only a car faster than this cancels it
 export const LAUNCH_THROTTLE = 0.6;  // throttle needed to arm a launch
 export const IDLE_RPM = 900;
 export const REDLINE_RPM = 7500;
+/** Minimum RPM when the car is rolling in gear (wheels turning the engine). */
+export const COAST_RPM = 2000;
+/** Speed (m/s) above which the coasting RPM floor applies (~7 km/h). */
+export const COAST_SPEED = 2.0;
+/** RPM/s: how fast revs drop when coasting (off-throttle). Slow = rev-hang feel. */
+export const RPM_COAST_FALL = 4000;
 const TORQUE_PEAK = 0.7;          // rpm fraction of peak torque
 
 export interface GearboxState {
@@ -59,10 +73,17 @@ export interface GearboxState {
   gearTime: number;   // s since the last gear change
   launch: number;     // 0..1 launch build-up on the line (1 = clutch dropped)
   kickTimer: number;  // s left of the launch kick
+  // --- local event counters (not synced) ---
+  shiftSeq: number;   // +1 on every gear change
+  shiftDir: number;   // direction of the LAST gear change: +1 up, -1 down
+  launchSeq: number;  // +1 at every clutch drop
 }
 
 export function createGearbox(): GearboxState {
-  return { gear: 1, rpm: IDLE_RPM, shiftTimer: 0, boostTimer: 0, gearTime: 0, launch: 0, kickTimer: 0 };
+  return {
+    gear: 1, rpm: IDLE_RPM, shiftTimer: 0, boostTimer: 0, gearTime: 0, launch: 0, kickTimer: 0,
+    shiftSeq: 0, shiftDir: 0, launchSeq: 0,
+  };
 }
 
 /** Top speed (m/s) of a gear (1-based). 6th uses the car's own top speed. */
@@ -98,6 +119,17 @@ export function isLaunching(s: GearboxState): boolean {
   return s.gear === 1 && s.launch > 0 && s.launch < 1;
 }
 
+/** 1 at the clutch drop, fading to 0 over LAUNCH_KICK_TIME. Drive squat, FOV kick, dust, wheelspin audio. */
+export function kickEnvelope(s: GearboxState): number {
+  return s.gear === 1 ? clamp(s.kickTimer / LAUNCH_KICK_TIME, 0, 1) : 0;
+}
+
+/** 0 = no shift, 1 = power cut (clutch in), 2 = clutch biting (power fading back in). */
+export function shiftPhase(s: GearboxState): number {
+  if (s.shiftTimer <= 0) return 0;
+  return s.shiftTimer > SHIFT_RAMP ? 1 : 2;
+}
+
 /** Advance the gearbox one fixed step. Mutates and returns s. */
 export function stepGearbox(
   s: GearboxState,
@@ -114,12 +146,27 @@ export function stepGearbox(
   const v = Math.max(0, speed);
 
   // --- Launch: standing start in 1st with the throttle pinned.
-  if (s.gear === 1 && v < LAUNCH_MAX_SPEED && throttle >= LAUNCH_THROTTLE) {
+  // Armed only from (almost) standstill, but once the build-up has begun it is latched:
+  // the car creeping/rolling (slope, tyre slip, the physics letting it drift) up to
+  // LAUNCH_ABORT_SPEED no longer cancels it before the clutch drops.
+  const building = s.launch > 0 && s.launch < 1;
+  if (
+    s.gear === 1 &&
+    throttle >= LAUNCH_THROTTLE &&
+    (v < LAUNCH_MAX_SPEED || (building && v < LAUNCH_ABORT_SPEED))
+  ) {
     if (s.launch < 1) {
       s.launch = Math.min(1, s.launch + dt / LAUNCH_REV_TIME);
-      if (s.launch >= 1) s.kickTimer = LAUNCH_KICK_TIME; // clutch dropped: kick
+      if (s.launch >= 1) {
+        s.kickTimer = LAUNCH_KICK_TIME; // clutch dropped: kick
+        s.launchSeq++;
+      }
     }
-  } else if (s.gear !== 1 || v >= LAUNCH_MAX_SPEED || throttle < 0.2) {
+  } else if (
+    s.gear !== 1 ||
+    throttle < 0.2 ||
+    v >= (building ? LAUNCH_ABORT_SPEED : LAUNCH_MAX_SPEED)
+  ) {
     s.launch = 0; // rolling or off the throttle: re-arm for the next standing start
   }
 
@@ -146,24 +193,40 @@ export function stepGearbox(
     s.gear--;
     s.shiftTimer = DOWNSHIFT_CUT + 0.0001;
   }
-  if (s.gear !== shiftedAt) s.gearTime = 0;
+  if (s.gear !== shiftedAt) {
+    s.gearTime = 0;
+    s.shiftSeq++;
+    s.shiftDir = s.gear > shiftedAt ? 1 : -1;
+  }
 
   // --- Engine revs. Locked to the wheels once the clutch is home; while it is in
   // (shift) or slipping (launch) they move at a finite rate, so you hear and see
   // the drop between gears and the build-up on the line.
-  let target = IDLE_RPM + (REDLINE_RPM - IDLE_RPM) * clamp(v / gearTopSpeed(s.gear, carTop), 0, 1);
-  if (s.gear === 1 && throttle >= LAUNCH_THROTTLE && v < LAUNCH_MAX_SPEED && s.launch < 1) {
+  //
+  // Coasting RPM floor: when the car is rolling (v > COAST_SPEED) the engine is
+  // turned by the wheels and never drops below COAST_RPM — so it sounds alive,
+  // not dead.  At standstill it idles normally.
+  const floor = v > COAST_SPEED ? COAST_RPM : IDLE_RPM;
+  let target = floor + (REDLINE_RPM - floor) * clamp(v / gearTopSpeed(s.gear, carTop), 0, 1);
+  // Ensure the target is never below the floor (low speed in a tall gear).
+  target = Math.max(target, floor);
+  if (isLaunching(s)) {
     target = Math.max(target, IDLE_RPM + (LAUNCH_RPM - IDLE_RPM) * s.launch);
   } else if (s.gear === 1 && s.kickTimer > 0) {
     // wheelspin: the revs hang above the road speed and settle as the kick fades
     const f = s.kickTimer / LAUNCH_KICK_TIME;
     target = Math.max(target, target + (LAUNCH_RPM - target) * f * f);
   }
-  if (isShifting(s) || s.shiftTimer > 0 || (s.gear === 1 && s.launch > 0 && s.launch < 1)) {
+  // RPM always transitions gradually — never snaps.  During shifts/launches the
+  // rate is RPM_FALL / RPM_RISE (the shift-drop sound).  During normal driving
+  // it uses RPM_RISE going up (instant feel) and RPM_COAST_FALL going down (the
+  // satisfying rev-hang when you lift off the throttle).
+  if (isShifting(s) || s.shiftTimer > 0 || isLaunching(s)) {
     const down = RPM_FALL * dt, up = RPM_RISE * dt;
     s.rpm += clamp(target - s.rpm, -down, up);
   } else {
-    s.rpm = target;
+    const down = RPM_COAST_FALL * dt, up = RPM_RISE * dt;
+    s.rpm += clamp(target - s.rpm, -down, up);
   }
   return s;
 }

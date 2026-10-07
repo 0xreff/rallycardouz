@@ -315,6 +315,17 @@ export class EngineAudio {
     src.start();
   }
 
+  /** Expose the AudioContext for add-on layers (crackle pops, turbo whine). */
+  getContext(): AudioContext | null { return this.ctx; }
+
+  /** Expose the master GainNode so add-on layers share the same compressor chain. */
+  getMaster(): GainNode | null { return this.master; }
+
+  /** Retrieve a loaded one-shot buffer by name (from manifest.json). */
+  getOneShotBuffer(name: string): AudioBuffer | undefined {
+    return this.oneShots.get(name);
+  }
+
   setVolume(v: number): void {
     if (this.master) this.master.gain.value = clamp01(v);
   }

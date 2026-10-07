@@ -16,8 +16,9 @@ import { Car } from "./Car";
 import { CARS, DEFAULT_CAR } from "./CarSpec";
 import { Track } from "./Track";
 import { BotController } from "./BotController";
-import { rpmFraction, isShifting } from "./gearbox";
+import { rpmFraction, isShifting, BOOST_TIME } from "./gearbox";
 import { EngineAudio } from "../engine/EngineAudio";
+import { EngineFx, type FxSink } from "../engine/EngineFx";
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
@@ -35,6 +36,7 @@ export class Game {
   private smoke!: Smoke;
   private dust!: Dust;
   private engineAudio = new EngineAudio(); // Engine Simulator samples (see tools/make_engine_loops.py)
+  private engineFx: EngineFx | null = null; // overrun crackle / turbo spool (initialised after audio loads)
   private carKeys = Object.keys(CARS);
   private carIndex = this.carKeys.indexOf(DEFAULT_CAR);
   private clock = new THREE.Clock();
@@ -122,7 +124,73 @@ export class Game {
 
     // Start fetching/decoding the engine loops now; sound begins on the first key
     // press (browsers block audio until the player interacts with the page).
-    void this.engineAudio.load();
+    // After loading, create the overrun crackle/pop layer.
+    void this.engineAudio.load().then(() => {
+      this.engineFx = this.createEngineFx();
+    });
+  }
+
+  /**
+   * Build the overrun crackle / turbo FX layer.  Uses the same AudioContext and
+   * master bus as EngineAudio so pops go through the compressor and gain knob.
+   * Loads real recordings from the manifest's oneShots ("pop_0", "pop_1", "bov").
+   */
+  private createEngineFx(): EngineFx | null {
+    const ctx = this.engineAudio.getContext();
+    const master = this.engineAudio.getMaster();
+    if (!ctx || !master) return null;
+
+    const POP_GAIN = 0.8;
+    const BOV_GAIN = 0.8;
+    const MAX_VOICES = 8;
+    let activeVoices = 0;
+
+    // --- Load recorded samples ---
+    const popBuffers: AudioBuffer[] = [];
+    for (let i = 0; i < 20; i++) {
+      const buf = this.engineAudio.getOneShotBuffer(`pop_${i}`);
+      if (buf) popBuffers.push(buf);
+    }
+    const bovBuffer = this.engineAudio.getOneShotBuffer("bov");
+
+    if (popBuffers.length === 0 && !bovBuffer) {
+      console.info("[EngineFx] No 'pop_X' or 'bov' oneShots found in manifest. Crackle FX disabled.");
+      return null;
+    }
+
+    // --- FX gain bus (routed through the master/compressor) ---
+    const fxBus = ctx.createGain();
+    fxBus.gain.value = 1;
+    fxBus.connect(master);
+
+    const sink: FxSink = {
+      pop(intensity, variant, pitch) {
+        if (activeVoices >= MAX_VOICES || popBuffers.length === 0) return;
+        const src = ctx.createBufferSource();
+        src.buffer = popBuffers[variant % popBuffers.length];
+        src.playbackRate.value = pitch;
+        const g = ctx.createGain();
+        g.gain.value = intensity * POP_GAIN;
+        src.connect(g).connect(fxBus);
+        activeVoices++;
+        src.onended = () => { activeVoices--; };
+        src.start();
+      },
+      bov(intensity) {
+        if (activeVoices >= MAX_VOICES || !bovBuffer) return;
+        const src = ctx.createBufferSource();
+        src.buffer = bovBuffer;
+        src.playbackRate.value = 0.9 + Math.random() * 0.2;
+        const g = ctx.createGain();
+        g.gain.value = intensity * BOV_GAIN;
+        src.connect(g).connect(fxBus);
+        activeVoices++;
+        src.onended = () => { activeVoices--; };
+        src.start();
+      },
+    };
+
+    return new EngineFx(sink, Math.max(1, popBuffers.length));
   }
 
   private setupEnvironment() {
@@ -303,6 +371,18 @@ export class Game {
         },
         dt
       );
+
+      // Overrun crackle / turbo spool FX layer.
+      if (this.engineFx) {
+        this.engineFx.update(
+          dt,
+          controls.throttle,
+          rpmFrac,
+          gb.shiftSeq,
+          gb.shiftDir,
+          gb.boostTimer > 0 ? gb.boostTimer / BOOST_TIME : 0
+        );
+      }
 
       this.composer.render();
     };

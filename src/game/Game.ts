@@ -17,6 +17,7 @@ import { CARS, DEFAULT_CAR } from "./CarSpec";
 import { Track } from "./Track";
 import { BotController } from "./BotController";
 import { rpmFraction } from "./gearbox";
+import { EngineAudio } from "../engine/EngineAudio";
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
@@ -33,6 +34,7 @@ export class Game {
   private sparks!: Sparks;
   private smoke!: Smoke;
   private dust!: Dust;
+  private engineAudio = new EngineAudio(); // Engine Simulator samples (see tools/make_engine_loops.py)
   private carKeys = Object.keys(CARS);
   private carIndex = this.carKeys.indexOf(DEFAULT_CAR);
   private clock = new THREE.Clock();
@@ -117,6 +119,10 @@ export class Game {
     this.gearHintEl = document.querySelector("#gearHint");
 
     window.addEventListener("resize", () => this.onResize());
+
+    // Start fetching/decoding the engine loops now; sound begins on the first key
+    // press (browsers block audio until the player interacts with the page).
+    void this.engineAudio.load();
   }
 
   private setupEnvironment() {
@@ -196,7 +202,7 @@ export class Game {
 
       if (controls.cycleCar) this.cycleCar();
       if (controls.changeView) this.chase.cycleMode();
-      
+
       if (controls.reset) {
         this.car.reset();
         const ct = this._camTarget;
@@ -208,7 +214,7 @@ export class Game {
         ct.impact = 0; ct.lookLeft = false; ct.lookRight = false;
         this.chase.snap(ct);
       }
-      
+
       if (controls.recover) this.car.recover();
       // A teleport (reset / recover) must not be blended from the old spot.
       if (controls.reset || controls.recover) this.car.savePreviousState();
@@ -283,6 +289,19 @@ export class Game {
         this.gearHintEl.className = hint === 2 ? "boom" : hint === 1 ? "ready" : "";
         this.lastHint = hint;
       }
+
+      // Engine sound. RPM / shift state come from the gearbox, so the audio follows
+      // exactly what the HUD shows. "limiter" = pinned on the redline under throttle.
+      const rpmFrac = rpmFraction(gb.rpm);
+      this.engineAudio.update(
+        {
+          rpmFrac,
+          throttle: controls.throttle,
+          shifting: gb.shiftTimer > 0,
+          limiter: controls.throttle > 0 && rpmFrac >= 0.97 && !this.car.isAirborne(),
+        },
+        dt
+      );
 
       this.composer.render();
     };

@@ -263,7 +263,7 @@ export const CARS: Record<string, CarSpec> = {
     wheelRadius: 0.42, wheelWidth: 0.3,
     mass: 2400,
     comOffset: { x: 0, y: -0.38, z: 0.05 },
-    engineAccel: 14, maxBrake: 22, handbrake: 5,
+    engineAccel: 14, maxBrake: 52, handbrake: 5,
     topSpeed: 44,
     tailSlip: 0.05, weightTransfer: 0.15, powerOversteer: 0.6,
     visualRotationY: Math.PI,

@@ -176,18 +176,42 @@ def seam_jump(loop: np.ndarray) -> float:
     return abs(float(loop[0] - loop[-1])) / typical
 
 
-def implied_rpm(loop: np.ndarray, rpm: float, cylinders: int):
-    """Advisory: search +-20 % around the labelled RPM for the best harmonic series
-    of the firing frequency (cylinders/2 firings per rev for a 4-stroke)."""
-    f_fire = rpm / 60.0 * cylinders / 2.0
-    f, p = signal.welch(loop, SR, nperseg=SR)
-    best_r, best = 1.0, -1.0
-    for r in np.arange(0.80, 1.2001, 0.005):
-        harm = f_fire * r * np.arange(1, 7)
-        harm = harm[harm < 4000]
-        sc = float(np.sum(np.interp(harm, f, p)))
-        if sc > best:
+def implied_rpm(loop: np.ndarray, rpm: float, cylinders: int = 6):
+    """Advisory: does the pitch fit the labelled RPM? Returns (estimated rpm, ratio to label).
+
+    Every steady engine sound is a harmonic series of rpm/120 Hz (one 4-stroke cycle
+    = two crank turns), whatever the cylinder count or firing pattern. So take the
+    strongest spectral peaks and see how well they sit on that comb. The label is
+    accepted when they fit it; it is only questioned when they clearly do NOT fit it
+    and clearly DO fit a different rate within +-20 %. A clean series can also fit a
+    finer comb by coincidence (e.g. a label 7/6 too low), which this cannot catch.
+    `cylinders` is kept only so old callers still work.
+    """
+    f, p = signal.welch(loop - np.mean(loop), SR, nperseg=2 * SR)
+    db = 10 * np.log10(p + 1e-20)
+    band = (f >= 20) & (f <= 1500)
+    ff, dd = f[band], db[band]
+    idx, _ = signal.find_peaks(dd, prominence=6, distance=max(1, int(10 / (f[1] - f[0]))))
+    idx = idx[dd[idx] > dd[idx].max() - 25] if len(idx) else idx   # ignore noise-floor bumps
+    top = idx[np.argsort(dd[idx])[::-1][:12]]
+    peaks = ff[top]
+    if len(peaks) < 4:
+        return rpm, 1.0
+
+    def fit(r: float) -> float:
+        k = peaks / (rpm / 120.0 * r)
+        res = np.abs(k - np.round(k))
+        return float(np.mean(np.clip(1 - res / 0.1, 0, 1)))
+
+    if fit(1.0) >= 0.7:
+        return rpm, 1.0
+    best_r, best = 1.0, 0.0
+    for r in sorted(np.arange(0.80, 1.2001, 0.002), key=lambda v: abs(v - 1)):
+        sc = fit(r)
+        if sc > best + 1e-9:
             best, best_r = sc, float(r)
+    if best < 0.8:
+        return rpm, 1.0   # nothing fits convincingly: cannot tell, do not accuse
     return rpm * best_r, best_r
 
 

@@ -673,7 +673,7 @@ export class Car {
     // Gearbox: 1-5 shift automatically, 5th holds the car on the FIFTH_TOP limiter
     // until the player holds T, which engages 6th with a power kick and opens the
     // full top speed (topEndCap, which keeps its slow overspeed creep).
-    stepGearbox(this.gearbox, speed, spec.topSpeed, !!controls.unlockSixth, dt);
+    stepGearbox(this.gearbox, speed, spec.topSpeed, !!controls.unlockSixth, dt, controls.throttle);
     const speedLimit = speedCap(this.gearbox, this.topEndCap);
 
     let engine = 0;

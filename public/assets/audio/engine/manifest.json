@@ -1,0 +1,29 @@
+{
+  "points": [
+    {
+      "rpm": 1000,
+      "on": "on_1000.wav",
+      "off": "off_1000.wav"
+    },
+    {
+      "rpm": 2000,
+      "on": "on_2000.wav",
+      "off": "off_2000.wav"
+    },
+    {
+      "rpm": 3500,
+      "on": "on_3500.wav",
+      "off": "off_3500.wav"
+    },
+    {
+      "rpm": 5000,
+      "on": "on_5000.wav",
+      "off": "off_5000.wav"
+    },
+    {
+      "rpm": 6500,
+      "on": "on_6500.wav",
+      "off": "off_6500.wav"
+    }
+  ]
+}

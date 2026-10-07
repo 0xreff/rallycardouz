@@ -16,7 +16,7 @@ import { Car } from "./Car";
 import { CARS, DEFAULT_CAR } from "./CarSpec";
 import { Track } from "./Track";
 import { BotController } from "./BotController";
-import { rpmFraction } from "./gearbox";
+import { rpmFraction, isShifting } from "./gearbox";
 import { EngineAudio } from "../engine/EngineAudio";
 
 export class Game {
@@ -296,8 +296,9 @@ export class Game {
       this.engineAudio.update(
         {
           rpmFrac,
+          rpm: gb.rpm,
           throttle: controls.throttle,
-          shifting: gb.shiftTimer > 0,
+          shifting: isShifting(gb),
           limiter: controls.throttle > 0 && rpmFrac >= 0.97 && !this.car.isAirborne(),
         },
         dt

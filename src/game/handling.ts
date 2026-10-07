@@ -68,7 +68,7 @@ export function powerOversteer(
   rearDriveShare: number,
   rearGrip: number
 ): number {
-  const rolling = clamp(speed / 8, 0, 1);
+  const rolling = clamp(speed / 5, 0, 1);
   const loose = 2 - clamp(rearGrip, 0, 1);
   return clamp(strength * throttle * steerAbs * rolling * rearDriveShare * loose, 0, 0.9);
 }

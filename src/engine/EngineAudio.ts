@@ -1,40 +1,30 @@
 /**
  * Engine sound for the game, built from Engine Simulator recordings.
  *
- * How it works (the usual game-audio approach):
- *  - You record the engine at several steady RPMs, once with the throttle open
- *    ("on") and once closed ("off"), and turn each recording into a seamless
- *    loop with tools/make_engine_loops.py.
- *  - At runtime every loop plays all the time, silently. The game's RPM picks
- *    the two loops that bracket it and crossfades them (equal power); each
- *    loop is also pitch-shifted (playbackRate) so the pitch follows the RPM
- *    continuously between the recorded points.
- *  - Throttle crossfades between the "on" and "off" loops. A gear shift lifts
- *    the throttle for the shift cut. On the rev limiter an optional recorded
- *    limiter loop takes over, or (without one) the sound is chopped in a
- *    limiter-style bounce.
+ *  - Every recorded loop plays all the time, silently. The engine RPM picks the
+ *    two loops that bracket it and crossfades them (equal power); each loop is
+ *    pitch-shifted (playbackRate) so the pitch follows the RPM continuously.
+ *  - Throttle crossfades between the "on" and "off" loops. The gearbox's shift
+ *    cut lifts the throttle and ducks the level a little.
+ *  - NEW: when the caller passes `rpm` (the gearbox's real rpm, 900..7500) the
+ *    sound follows it directly: no launch flare, almost no extra smoothing, so the
+ *    shift drop and the launch build-up are exactly what the gearbox does.
+ *    Without `rpm` the old rpmFrac behaviour is used.
+ *  - A compressor on the master bus stops the summed loops from clipping.
  *
  * With no samples in public/assets/audio/engine/ it falls back to a crude
- * placeholder synth so the wiring can be tested before you record anything.
- *
- * The maths lives in small pure functions (see EngineAudio.test.ts); the class
- * only talks to Web Audio.
+ * placeholder synth so the wiring can be tested.
  */
 
 export interface EngineLoopPoint {
-  /** RPM the clips were recorded at (Engine Simulator RPM hold). */
   rpm: number;
-  /** Full-throttle loop file. */
   on: string;
-  /** Closed-throttle (engine braking) loop file. */
   off: string;
 }
 
 export interface EngineManifest {
   points: EngineLoopPoint[];
-  /** Optional loop recorded bouncing off the rev limiter. */
   limiter?: string;
-  /** Optional one-shots, e.g. { start: "start.wav", stall: "stall.wav" }. */
   oneShots?: Record<string, string>;
 }
 
@@ -47,16 +37,24 @@ export interface EngineAudioInput {
   shifting: boolean;
   /** True while pinned on the rev limiter under throttle. */
   limiter: boolean;
+  /** Real gearbox rpm. When given, the sound follows it directly. */
+  rpm?: number;
 }
 
 // ---- tuning knobs ----------------------------------------------------------
-/** How fast the audible RPM rises / falls toward the game RPM (1/s). */
+/** Legacy path only (no `rpm` input): audible RPM rise / fall speeds (1/s). */
 export const REV_RISE = 6;
 export const REV_FALL = 2.5;
-/** At a standstill with throttle the engine flares up by this RPM fraction... */
+/** Legacy path only: launch flare. Not used when `rpm` is passed. */
 export const LAUNCH_FLARE = 0.25;
-/** ...fading out by this RPM fraction (the car is moving, the clutch has "bitten"). */
 export const LAUNCH_ZONE = 0.4;
+/** Direct path: how tightly the audible rpm follows the gearbox rpm (1/s). Only removes 60 Hz stair-steps. */
+export const RPM_FOLLOW = 35;
+/** Game rpm range (matches gearbox.ts IDLE_RPM / REDLINE_RPM). */
+export const GAME_IDLE_RPM = 900;
+export const GAME_REDLINE_RPM = 7500;
+/** Level dip while the clutch is in during a shift (0 = none, 1 = silent). */
+export const SHIFT_DUCK = 0.3;
 /** Throttle on/off crossfade speeds (1/s). */
 export const LOAD_RISE = 14;
 export const LOAD_FALL = 9;
@@ -88,10 +86,7 @@ export interface Blend {
   wHi: number;
 }
 
-/**
- * Equal-power crossfade between the two recorded RPM points that bracket `rpm`.
- * `rpms` must be ascending. Outside the recorded range the end point plays alone.
- */
+/** Equal-power crossfade between the two recorded RPM points that bracket `rpm`. */
 export function blendPoints(rpm: number, rpms: readonly number[]): Blend {
   const n = rpms.length;
   if (n === 1 || rpm <= rpms[0]) return { lo: 0, hi: 0, wLo: 1, wHi: 0 };
@@ -109,7 +104,7 @@ export function chase(cur: number, target: number, dt: number, rise: number, fal
   return cur + (target - cur) * k;
 }
 
-/** The RPM fraction the engine should sound like: game RPM plus the launch flare. */
+/** Legacy: the RPM fraction the engine should sound like, with the launch flare. */
 export function targetRevFrac(rpmFrac: number, throttle: number): number {
   const flare = throttle > 0 ? LAUNCH_FLARE * clamp01(1 - rpmFrac / LAUNCH_ZONE) : 0;
   return clamp01(rpmFrac + flare);
@@ -140,12 +135,13 @@ export class EngineAudio {
 
   private unlocked = false;
   private revFrac = 0;
+  private revRpm = GAME_IDLE_RPM;
   private throttleMix = 0;
+  private shiftMix = 0;
   private limiterMix = 0;
   private limPhase = 0;
 
   constructor() {
-    // Browsers only allow sound after a user gesture: resume on the first one.
     const unlock = () => {
       void this.unlock();
       window.removeEventListener("keydown", unlock);
@@ -156,7 +152,6 @@ export class EngineAudio {
     window.addEventListener("pointerdown", unlock);
     window.addEventListener("touchstart", unlock);
 
-    // No engine drone from a background tab.
     document.addEventListener("visibilitychange", () => {
       if (!this.ctx || !this.unlocked) return;
       void (document.hidden ? this.ctx.suspend() : this.ctx.resume());
@@ -168,7 +163,14 @@ export class EngineAudio {
       this.ctx = new AudioContext();
       this.master = this.ctx.createGain();
       this.master.gain.value = MASTER_VOLUME;
-      this.master.connect(this.ctx.destination);
+      // Safety limiter: several loops add up, this keeps the sum from clipping.
+      const comp = this.ctx.createDynamicsCompressor();
+      comp.threshold.value = -10;
+      comp.knee.value = 8;
+      comp.ratio.value = 8;
+      comp.attack.value = 0.003;
+      comp.release.value = 0.15;
+      this.master.connect(comp).connect(this.ctx.destination);
     }
     return this.ctx;
   }
@@ -179,11 +181,6 @@ export class EngineAudio {
     this.unlocked = ctx.state === "running";
   }
 
-  /**
-   * Fetch + decode the loops listed in manifest.json and start them (silent
-   * until update() drives their gains). Falls back to the placeholder synth if
-   * the manifest or any file is missing.
-   */
   async load(baseUrl = `${import.meta.env.BASE_URL}assets/audio/engine/`): Promise<void> {
     const ctx = this.ensureContext();
     try {
@@ -222,7 +219,7 @@ export class EngineAudio {
     } catch (err) {
       console.info(
         `[EngineAudio] samples not available (${(err as Error).message}); using the placeholder synth. ` +
-          `Put the output of tools/make_engine_loops.py in public/assets/audio/engine/.`
+        `Put the output of tools/make_engine_loops.py in public/assets/audio/engine/.`
       );
       this.layers = [];
       this.limiterLayer = null;
@@ -250,10 +247,16 @@ export class EngineAudio {
     if (!ctx || ctx.state !== "running") return;
     const t = ctx.currentTime;
 
-    // Audible RPM chases the game RPM (plus a launch flare under throttle).
+    const direct = input.rpm !== undefined;
     const load = input.shifting ? 0 : clamp01(input.throttle);
-    this.revFrac = chase(this.revFrac, targetRevFrac(input.rpmFrac, load), dt, REV_RISE, REV_FALL);
+    if (direct) {
+      // Follow the gearbox rpm exactly (it already models the shift drop and launch).
+      this.revRpm = chase(this.revRpm, input.rpm!, dt, RPM_FOLLOW, RPM_FOLLOW);
+    } else {
+      this.revFrac = chase(this.revFrac, targetRevFrac(input.rpmFrac, load), dt, REV_RISE, REV_FALL);
+    }
     this.throttleMix = chase(this.throttleMix, load, dt, LOAD_RISE, LOAD_FALL);
+    this.shiftMix = chase(this.shiftMix, input.shifting ? 1 : 0, dt, 25, 12);
 
     // Rev limiter: recorded loop if there is one, otherwise a chopped bounce.
     const hasLimiterLoop = this.limiterLayer !== null;
@@ -265,7 +268,10 @@ export class EngineAudio {
     } else {
       this.limPhase = 0;
     }
-    const rpmFrac = clamp01(this.revFrac - (cut ? LIMITER_CUT_RPM_DIP : 0));
+
+    const span = GAME_REDLINE_RPM - GAME_IDLE_RPM;
+    const baseFrac = direct ? clamp01((this.revRpm - GAME_IDLE_RPM) / span) : this.revFrac;
+    const rpmFrac = clamp01(baseFrac - (cut ? LIMITER_CUT_RPM_DIP : 0));
 
     if (this.fallback) {
       this.fallback.update(rpmFrac, this.throttleMix, t);
@@ -273,19 +279,21 @@ export class EngineAudio {
     }
     if (this.layers.length === 0) return; // still loading
 
-    const first = this.rpms[0];
-    const last = this.rpms[this.rpms.length - 1];
-    const rpm = simRpm(rpmFrac, first, last);
+    // Direct: the game rpm IS the sound rpm (real pitch). Legacy: remap the fraction.
+    const rpm = direct
+      ? Math.max(1, this.revRpm - (cut ? LIMITER_CUT_RPM_DIP * span : 0))
+      : simRpm(rpmFrac, this.rpms[0], this.rpms[this.rpms.length - 1]);
     const blend = blendPoints(rpm, this.rpms);
     const { on, off } = loadGains(this.throttleMix);
     const duck = hasLimiterLoop ? 1 - this.limiterMix : 1;
     const cutGain = cut ? LIMITER_CUT_GAIN : 1;
+    const shiftGain = 1 - SHIFT_DUCK * this.shiftMix;
 
     for (const layer of this.layers) {
       let w = 0;
       if (layer.point === blend.lo) w += blend.wLo;
       if (layer.point === blend.hi && blend.hi !== blend.lo) w += blend.wHi;
-      const g = w * (layer.kind === "on" ? on : off) * duck * cutGain;
+      const g = w * (layer.kind === "on" ? on : off) * duck * cutGain * shiftGain;
       const rate = Math.min(MAX_RATE, Math.max(MIN_RATE, rpm / this.rpms[layer.point]));
       layer.gain.gain.setTargetAtTime(g, t, 0.015);
       layer.src.playbackRate.setTargetAtTime(rate, t, 0.03);
@@ -295,7 +303,6 @@ export class EngineAudio {
     }
   }
 
-  /** Play a one-shot from the manifest (e.g. "start" or "stall"). */
   playOneShot(name: string, volume = 1): void {
     const ctx = this.ctx;
     const buf = this.oneShots.get(name);
@@ -325,10 +332,7 @@ export class EngineAudio {
   }
 }
 
-/**
- * Crude stand-in (a few oscillators and a low-pass) so the audio wiring can be
- * heard and tested before the real samples exist. NOT the final sound.
- */
+/** Crude stand-in so the audio wiring can be heard before the real samples exist. */
 class FallbackSynth {
   private oscs: { osc: OscillatorNode; ratio: number }[] = [];
   private lp: BiquadFilterNode;
@@ -358,7 +362,6 @@ class FallbackSynth {
   }
 
   update(rpmFrac: number, load: number, t: number): void {
-    // Game RPM 900..7500; an inline-6 fires 3 times per revolution (rpm / 20 Hz).
     const f = (900 + rpmFrac * 6600) / 20;
     for (const { osc, ratio } of this.oscs) osc.frequency.setTargetAtTime(f * ratio, t, 0.03);
     this.lp.frequency.setTargetAtTime(500 + 2500 * load + 1500 * rpmFrac, t, 0.05);

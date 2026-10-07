@@ -742,7 +742,7 @@ export class Car {
     // Gated by throttle: the tail steps out when coasting, but throttle plants it
     // (up to ~70% suppression) so power-on cornering is stable, not loose.
     const cornerDemand = Math.abs(controls.steer) * speedFrac;
-    const tailSlipFactor = spec.tailSlip * (1 - 0.7 * controls.throttle);
+    const tailSlipFactor = spec.tailSlip * (1 - 0.5 * controls.throttle);
     backSide *= 1 - tailSlipFactor * cornerDemand;
     // power oversteer → throttle mid-corner spins the driven rear tyres, which gives
     // up side grip: the tail steps out and the throttle steers the car (more on dirt).

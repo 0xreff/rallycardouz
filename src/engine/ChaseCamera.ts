@@ -13,6 +13,7 @@ export interface CameraTarget {
   impact: number;    // 0..1 collision / hard-landing shake intensity (decays in Car)
   lookLeft: boolean; // q
   lookRight: boolean; // e
+  lookBack: boolean; // 0
 }
 
 /**
@@ -121,11 +122,15 @@ export class ChaseCamera {
     this.chaseHeading.lerp(targetHeading, k(0.005)).normalize();
     const flatFwd = this._flatFwd.copy(this.chaseHeading);
 
-    // --- Look Pan: smoothly swing the camera around the car 45 degrees ---
+    // --- Look Pan: smoothly swing the camera around the car ---
     let targetPan = 0;
-    if (t.lookLeft && !t.lookRight) targetPan = Math.PI / 4;
+    if (t.lookBack) targetPan = Math.PI;
+    else if (t.lookLeft && !t.lookRight) targetPan = Math.PI / 4;
     else if (t.lookRight && !t.lookLeft) targetPan = -Math.PI / 4;
-    this.panAngle += (targetPan - this.panAngle) * k(0.015);
+    
+    // Smoothly interpolate pan angle taking the shortest path around the circle
+    const diff = Math.atan2(Math.sin(targetPan - this.panAngle), Math.cos(targetPan - this.panAngle));
+    this.panAngle += diff * k(0.015);
 
     const offsetFwd = this._offsetFwd.copy(flatFwd).applyAxisAngle(this._yAxis.set(0, 1, 0), this.panAngle);
 

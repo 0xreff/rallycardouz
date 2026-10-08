@@ -17,7 +17,9 @@ async function groundedCar() {
   physics = await Physics.create();
   const R = physics.rapier;
   physics.world.createCollider(R.ColliderDesc.cuboid(100, 0.5, 100).setTranslation(0, -0.5, 0));
-  const skids = { add: vi.fn() };
+  // Ribbon skid-mark API (see engine/SkidMarks.ts). `addPoint(..., strength 0)` only
+  // closes a trail, so it doesn't count as laying a mark.
+  const skids = { addPoint: vi.fn(), stamp: vi.fn(), endTrail: vi.fn() };
   const sparks = { emit: vi.fn() };
   const smoke = { emit: vi.fn() };
   const dust = { emit: vi.fn() };
@@ -32,6 +34,12 @@ async function groundedCar() {
   return { car, skids, smoke, dust };
 }
 
+/** Number of calls that actually lay a mark on the ground. */
+function marksLaid(skids: { addPoint: ReturnType<typeof vi.fn>; stamp: ReturnType<typeof vi.fn> }) {
+  const strength = (c: unknown[]) => c[4] as number;
+  return skids.addPoint.mock.calls.filter((c) => strength(c) > 0).length + skids.stamp.mock.calls.length;
+}
+
 describe("stationary handbrake", () => {
   it("clears tiny horizontal creep and yaw without stationary wheel effects", async () => {
     const { car, skids, smoke, dust } = await groundedCar();
@@ -43,7 +51,7 @@ describe("stationary handbrake", () => {
     expect(Math.abs(car.body.linvel().z)).toBe(0);
     expect(Math.abs(car.body.angvel().y)).toBe(0);
     car.syncMeshes();
-    expect(skids.add).not.toHaveBeenCalled();
+    expect(marksLaid(skids)).toBe(0);
     expect(smoke.emit).not.toHaveBeenCalled();
     expect(dust.emit).not.toHaveBeenCalled();
   });
@@ -62,10 +70,11 @@ describe("stationary handbrake", () => {
   });
 
   it("preserves throttle-plus-handbrake burnouts", async () => {
-    const { car, smoke } = await groundedCar();
+    const { car, smoke, skids } = await groundedCar();
     car.update({ ...stopped, throttle: 1, handbrake: true }, dt);
     car.syncMeshes();
     expect(smoke.emit).toHaveBeenCalled();
+    expect(skids.stamp).toHaveBeenCalled(); // scrub patch under the spinning wheels
   });
 
   it("can accelerate again after releasing the handbrake", async () => {

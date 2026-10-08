@@ -32,6 +32,9 @@ const SPAWN_XZ = new THREE.Vector2(-200, -170);
 export class Track {
   readonly spawn = new THREE.Vector3(SPAWN_XZ.x, 2, SPAWN_XZ.y);
 
+  /** The desert floor mesh (the Game adds the wind-ripple shader to its material). */
+  terrain!: THREE.Mesh;
+
   // Collider-handle → surface registry: cars query this to know what each wheel
   // is rolling on (tarmac road grips; dirt terrain slides and kicks up dust).
   readonly surfaces = new SurfaceMap();
@@ -80,8 +83,8 @@ export class Track {
     const geo = new THREE.BufferGeometry();
     const pos = new Float32Array((n + 1) * (n + 1) * 3);
     const col = new Float32Array((n + 1) * (n + 1) * 3);
-    const low = new THREE.Color(0x1d2640);
-    const high = new THREE.Color(0x4a6cff);
+    const low = new THREE.Color(0x221a40);  // dark violet valleys
+    const high = new THREE.Color(0x5b66e8); // blue-violet crests
 
     for (let i = 0; i <= n; i++) {        // rows → z
       for (let j = 0; j <= n; j++) {      // cols → x
@@ -124,6 +127,7 @@ export class Track {
     mesh.receiveShadow = true;
     mesh.castShadow = true;
     this.scene.add(mesh);
+    this.terrain = mesh;
 
     const body = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed());
     const terrainCol = this.physics.world.createCollider(

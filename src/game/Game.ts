@@ -12,6 +12,8 @@ import { SkidMarks } from "../engine/SkidMarks";
 import { Sparks } from "../engine/Sparks";
 import { Smoke } from "../engine/Smoke";
 import { Dust } from "../engine/Dust";
+import { NightAtmosphere, type Quality } from "../engine/NightAtmosphere";
+import { AtmospherePass } from "../engine/AtmospherePass";
 import { Car } from "./Car";
 import { CARS, DEFAULT_CAR } from "./CarSpec";
 import { Track } from "./Track";
@@ -40,7 +42,11 @@ export class Game {
   private carKeys = Object.keys(CARS);
   private carIndex = this.carKeys.indexOf(DEFAULT_CAR);
   private clock = new THREE.Clock();
-  private sun!: THREE.DirectionalLight;
+  private atmosphere!: NightAtmosphere;
+  private atmospherePass!: AtmospherePass;
+  // "low" on phones/tablets (no god rays, smaller shadow map, lower pixel ratio).
+  // Override with ?quality=low or ?quality=high in the URL to test.
+  private quality: Quality = detectQuality();
   private speedEl: HTMLElement;
   private carNameEl: HTMLElement | null;
   private lastDisplayedSpeed = -1;
@@ -68,7 +74,7 @@ export class Game {
     // which bypass canvas MSAA anyway; SMAA at the end of the post chain does
     // the anti-aliasing instead, so the multisampled backbuffer is pure waste.
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.quality === "low" ? 1.5 : 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -84,6 +90,8 @@ export class Game {
 
     // --- World ---
     this.track = new Track(physics, this.scene);
+    // Sand ripples + gust waves on the desert floor (map only).
+    this.atmosphere.applyGroundWind(this.track.terrain.material as THREE.MeshStandardMaterial);
     this.skids = new SkidMarks(this.scene); // persists across car swaps
     this.sparks = new Sparks(this.scene);   // collision sparks
     this.smoke = new Smoke(this.scene);     // tyre smoke
@@ -95,11 +103,12 @@ export class Game {
     const botSpawn = this.track.spawn.clone().add(new THREE.Vector3(10, 0, 10));
     const botKeys = Object.keys(CARS);
     const randomBot = CARS[botKeys[Math.floor(Math.random() * botKeys.length)]];
-    this.bot = new Car(this.physics, this.scene, botSpawn, randomBot, this.skids, this.sparks, this.smoke, this.dust, this.track.surfaces);
+    this.bot = new Car(this.physics, this.scene, botSpawn, randomBot, this.skids, this.sparks, this.smoke, this.dust, this.track.surfaces, { fxSlot: 1 });
     this.botAI = new BotController(this.physics, this.bot);
 
     // --- Post-processing ---
-    // RenderPass → UnrealBloom (rim-glow) → OutputPass (tone map + sRGB) → SMAA.
+    // RenderPass → UnrealBloom → AtmospherePass (moon god rays + violet grade)
+    // → OutputPass (tone map + sRGB) → SMAA.
     // SMAA runs last, on the final display-referred image, where edge detection
     // behaves best.
     this.composer = new EffectComposer(this.renderer);
@@ -111,6 +120,8 @@ export class Game {
       0.85  // threshold
     );
     this.composer.addPass(bloom);
+    this.atmospherePass = new AtmospherePass(this.atmosphere.moonDir, this.quality);
+    this.composer.addPass(this.atmospherePass);
     this.composer.addPass(new OutputPass());
     const pr = this.renderer.getPixelRatio();
     this.composer.addPass(new SMAAPass(window.innerWidth * pr, window.innerHeight * pr));
@@ -194,31 +205,12 @@ export class Game {
   }
 
   private setupEnvironment() {
-    this.scene.background = new THREE.Color(0x0a0e1a);
-    this.scene.fog = new THREE.Fog(0x0a0e1a, 260, 1400);
-
-    // Key light (sun) with shadows. The shadow frustum is kept tight and made to
-    // follow the car each frame (see start()), so shadows stay crisp anywhere on
-    // the big map without needing a huge, blurry shadow map.
-    const sun = new THREE.DirectionalLight(0xfff2e0, 2.4);
-    sun.position.set(30, 50, 20);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.near = 10;
-    sun.shadow.camera.far = 120;
-    const s = 80;
-    sun.shadow.camera.left = -s;
-    sun.shadow.camera.right = s;
-    sun.shadow.camera.top = s;
-    sun.shadow.camera.bottom = -s;
-    sun.shadow.bias = -0.0004;
-    this.scene.add(sun);
-    this.scene.add(sun.target);
-    this.sun = sun;
-
-    // Cool ambient/hemisphere fill — gives the signature blue-tinted shadows.
-    const hemi = new THREE.HemisphereLight(0x9bb8ff, 0x202840, 0.9);
-    this.scene.add(hemi);
+    // Violet moonlit desert night: sky dome + stars + moon, fog, moonlight with
+    // shadows, blowing sand. See engine/NightAtmosphere.ts to tune the look.
+    this.atmosphere = new NightAtmosphere(this.scene, {
+      quality: this.quality,
+      pixelRatio: this.renderer.getPixelRatio(),
+    });
   }
 
   private onResize() {
@@ -231,7 +223,7 @@ export class Game {
   private spawnCar(index: number) {
     if (this.car) this.car.dispose(this.scene, this.physics);
     const spec = CARS[this.carKeys[index]];
-    this.car = new Car(this.physics, this.scene, this.track.spawn, spec, this.skids, this.sparks, this.smoke, this.dust, this.track.surfaces);
+    this.car = new Car(this.physics, this.scene, this.track.spawn, spec, this.skids, this.sparks, this.smoke, this.dust, this.track.surfaces, { fxSlot: 0, headlightBeam: true });
     if (this.carNameEl) this.carNameEl.textContent = spec.name;
     this.lastDisplayedSpeed = -1; // force HUD refresh for the new car
     this.lastGear = "";
@@ -306,11 +298,9 @@ export class Game {
       this.sparks.update(dt); // advance collision sparks
       this.smoke.update(dt);  // advance tyre smoke
       this.dust.update(dt);   // advance surface dust
+      this.skids.update(dt);  // fade old tyre tracks
 
-      // Keep the shadow frustum centred on the car as it roams the large map.
-      const cp = this.car.renderPosition(this._pos);
-      this.sun.target.position.set(cp.x, cp.y, cp.z);
-      this.sun.position.set(cp.x + 30, cp.y + 50, cp.z + 20);
+      const cp = this.car.renderPosition(this._pos); // interpolated car position
 
       // Feed the camera the INTERPOLATED state (same as the rendered mesh), not
       // the raw 60 Hz physics state, so camera and car move in lockstep and the
@@ -327,7 +317,13 @@ export class Game {
       ct.impact = this.car.impactLevel();
       ct.lookLeft = controls.lookLeft;
       ct.lookRight = controls.lookRight;
+      ct.lookBack = controls.lookBack;
       this.chase.update(ct, dt);
+
+      // Night atmosphere: sky follows the camera, moon shadows follow the car,
+      // and the post pass tracks where the moon is on screen.
+      this.atmosphere.update(dt, this.camera, cp);
+      this.atmospherePass.updateCamera(this.camera);
 
       // HUD speed (km/h) — only touch the DOM when the displayed value changes
       // to avoid piling up AXDirtyObject entries in the browser accessibility tree.
@@ -388,4 +384,11 @@ export class Game {
     };
     loop();
   }
+}
+
+function detectQuality(): Quality {
+  const forced = new URLSearchParams(window.location.search).get("quality");
+  if (forced === "low" || forced === "high") return forced;
+  const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  return coarse ? "low" : "high";
 }

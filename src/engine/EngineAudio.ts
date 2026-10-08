@@ -39,6 +39,8 @@ export interface EngineAudioInput {
   limiter: boolean;
   /** Real gearbox rpm. When given, the sound follows it directly. */
   rpm?: number;
+  /** True while the car is in the air (all wheels off the ground, debounced by the caller). */
+  airborne?: boolean;
 }
 
 // ---- tuning knobs ----------------------------------------------------------
@@ -68,6 +70,14 @@ export const MIN_RATE = 0.6;
 export const MAX_RATE = 1.6;
 /** Master volume (loops are normalised to about -3 dBFS by the tool). */
 export const MASTER_VOLUME = 0.7;
+/** Airborne: the unloaded engine revs up a little above the gearbox rpm (0 = off). */
+export const AIR_FLARE_RPM = 800;
+export const AIR_RISE = 8;  // 1/s
+export const AIR_FALL = 9;  // 1/s
+/** Landing: the "land" one-shot plus a short level dip when the tyres grip again. */
+export const LAND_VOLUME = 0.8;
+export const LAND_DUCK = 0.35;
+export const LAND_DUCK_TIME = 0.15; // s
 
 // ---- pure helpers ----------------------------------------------------------
 export function clamp01(v: number): number {
@@ -140,6 +150,9 @@ export class EngineAudio {
   private shiftMix = 0;
   private limiterMix = 0;
   private limPhase = 0;
+  private airMix = 0;
+  private landDuck = 0;
+  private wasAirborne = false;
 
   constructor() {
     const unlock = () => {
@@ -249,9 +262,21 @@ export class EngineAudio {
 
     const direct = input.rpm !== undefined;
     const load = input.shifting ? 0 : clamp01(input.throttle);
+
+    // Airborne: the unloaded engine flares. Landing: thump + short level dip.
+    const airborne = !!input.airborne;
+    this.airMix = chase(this.airMix, airborne ? clamp01(input.throttle) : 0, dt, AIR_RISE, AIR_FALL);
+    if (this.wasAirborne && !airborne) {
+      this.landDuck = 1;
+      this.playOneShot("land", LAND_VOLUME);
+    }
+    this.wasAirborne = airborne;
+    this.landDuck = Math.max(0, this.landDuck - dt / LAND_DUCK_TIME);
+
     if (direct) {
       // Follow the gearbox rpm exactly (it already models the shift drop and launch).
-      this.revRpm = chase(this.revRpm, input.rpm!, dt, RPM_FOLLOW, RPM_FOLLOW);
+      const target = Math.min(input.rpm! + AIR_FLARE_RPM * this.airMix, GAME_REDLINE_RPM);
+      this.revRpm = chase(this.revRpm, Math.max(target, input.rpm!), dt, RPM_FOLLOW, RPM_FOLLOW);
     } else {
       this.revFrac = chase(this.revFrac, targetRevFrac(input.rpmFrac, load), dt, REV_RISE, REV_FALL);
     }
@@ -288,12 +313,13 @@ export class EngineAudio {
     const duck = hasLimiterLoop ? 1 - this.limiterMix : 1;
     const cutGain = cut ? LIMITER_CUT_GAIN : 1;
     const shiftGain = 1 - SHIFT_DUCK * this.shiftMix;
+    const landGain = 1 - LAND_DUCK * this.landDuck;
 
     for (const layer of this.layers) {
       let w = 0;
       if (layer.point === blend.lo) w += blend.wLo;
       if (layer.point === blend.hi && blend.hi !== blend.lo) w += blend.wHi;
-      const g = w * (layer.kind === "on" ? on : off) * duck * cutGain * shiftGain;
+      const g = w * (layer.kind === "on" ? on : off) * duck * cutGain * shiftGain * landGain;
       const rate = Math.min(MAX_RATE, Math.max(MIN_RATE, rpm / this.rpms[layer.point]));
       layer.gain.gain.setTargetAtTime(g, t, 0.015);
       layer.src.playbackRate.setTargetAtTime(rate, t, 0.03);

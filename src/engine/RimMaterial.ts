@@ -23,7 +23,7 @@ export function createRimMaterial(opts: RimOptions = {}): THREE.MeshStandardMate
     roughness: opts.roughness ?? 0.55,
   });
 
-  const rimColor = opts.rimColor ?? new THREE.Color(0.45, 0.6, 1.0);
+  const rimColor = opts.rimColor ?? new THREE.Color(0.62, 0.52, 1.0); // violet moon rim
   const rimStrength = opts.rimStrength ?? 0.32;
   const rimPower = opts.rimPower ?? 2.4;
 

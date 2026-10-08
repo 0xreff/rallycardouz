@@ -14,6 +14,7 @@ export interface ControlState {
   changeView: boolean; // cycle camera views
   lookLeft: boolean;  // swing camera 45deg left
   lookRight: boolean; // swing camera 45deg right
+  lookBack: boolean;  // swing camera 180deg back
 }
 
 export class Input {
@@ -65,11 +66,12 @@ export class Input {
 
     const lookLeft = this.has("q");
     const lookRight = this.has("e");
+    const lookBack = this.has("0");
 
     // T is a held key (not edge-triggered) so a quick tap can't fall between two
     // physics substeps and get lost.
     const unlockSixth = this.has("t");
 
-    return { throttle, brake, steer, handbrake: this.has(" "), unlockSixth, reset, recover, cycleCar, changeView, lookLeft, lookRight };
+    return { throttle, brake, steer, handbrake: this.has(" "), unlockSixth, reset, recover, cycleCar, changeView, lookLeft, lookRight, lookBack };
   }
 }

@@ -174,83 +174,6 @@ const TOYOTA: CarInput = {
  * suspension. Each car keeps its character: Bolt balanced, Hornet wild, Tank planted.
  */
 export const CARS: Record<string, CarSpec> = {
-  // Balanced all-rounder (box car).
-  bolt: makeCar({
-    name: "Bolt",
-    color: 0x2f6bff,
-    halfWidth: 0.88, halfHeight: 0.38, halfLength: 2.0,
-    wheelRadius: 0.33, wheelWidth: 0.22,
-    mass: 1250,
-    comOffset: { x: 0, y: -0.3, z: 0.05 },
-    inertiaScale: { x: 1, y: 0.7, z: 1.5 },
-    linearDamping: 0.1, angularDamping: 0.35,
-    engineAccel: 16, reverseAccel: 6.5, maxBrake: 22, handbrake: 4.5,
-    driveBias: { front: 0.7, back: 0.9 },
-    topSpeed: 46, launchSpeed: 9, launchBoost: 0.7,
-    overspeed: 0.2, overspeedAccel: 0.8,
-    maxSteer: 0.65, steerRate: 15, turnSlowdown: 0.03, engineRate: 15,
-    slipThreshold: 2.6, kineticGripRatio: 0.58,
-    rearGripBias: 0.70, liftoffOversteer: 0.35, tailSlip: 0.15,
-    powerOversteer: 0.55, handbrakeGrip: 0.18,
-    leanStrength: 0.045, leanLowSpeedAmp: 2.0,
-    brakeBiasFront: 0.62, weightTransfer: 0.2, accelTransfer: 0.2, brakeRamp: 18, lockupAt: 0.96, lockupGrip: 0.2,
-    ...RALLY_SUSPENSION,
-    frictionSlip: 3.2, sideFrictionStiffness: 1.15,
-    wheelZInset: 0.725, wheelXOffset: -0.1, // ~2.55 m wheelbase, ~1.56 m track
-  }),
-
-  // Fast, light, wild tail (box car).
-  hornet: makeCar({
-    name: "Hornet",
-    color: 0xffcc33,
-    halfWidth: 0.85, halfHeight: 0.4, halfLength: 1.95,
-    wheelRadius: 0.32, wheelWidth: 0.22,
-    mass: 1100,
-    comOffset: { x: 0, y: -0.3, z: 0.0 },
-    inertiaScale: { x: 1, y: 0.6, z: 1.5 },
-    linearDamping: 0.08, angularDamping: 0.3,
-    engineAccel: 18, reverseAccel: 7, maxBrake: 22, handbrake: 4,
-    driveBias: { front: 0.5, back: 1.0 },
-    topSpeed: 52, launchSpeed: 10, launchBoost: 0.8,
-    overspeed: 0.2, overspeedAccel: 1.0,
-    maxSteer: 0.68, steerRate: 17, turnSlowdown: 0.02, engineRate: 16,
-    slipThreshold: 2.0, kineticGripRatio: 0.52,
-    rearGripBias: 0.58, liftoffOversteer: 0.45, tailSlip: 0.22,
-    powerOversteer: 0.7, handbrakeGrip: 0.12,
-    leanStrength: 0.05, leanLowSpeedAmp: 2.2,
-    brakeBiasFront: 0.58, weightTransfer: 0.24, accelTransfer: 0.25, brakeRamp: 20, lockupAt: 0.95, lockupGrip: 0.28,
-    ...RALLY_SUSPENSION,
-    suspensionStiffness: 32,
-    frictionSlip: 2.8, sideFrictionStiffness: 1.0,
-    wheelZInset: 0.7, wheelXOffset: -0.1,
-  }),
-
-  // Heavy, low, wide, very hard to flip.
-  tank: makeCar({
-    name: "Tank",
-    color: 0x44dd88,
-    halfWidth: 1.0, halfHeight: 0.42, halfLength: 2.2,
-    wheelRadius: 0.38, wheelWidth: 0.3,
-    mass: 2200,
-    comOffset: { x: 0, y: -0.32, z: 0.05 },
-    inertiaScale: { x: 1.2, y: 0.85, z: 1.6 },
-    linearDamping: 0.12, angularDamping: 0.45,
-    engineAccel: 12, reverseAccel: 5.5, maxBrake: 22, handbrake: 5,
-    driveBias: { front: 1.0, back: 1.0 },
-    topSpeed: 42, launchSpeed: 8, launchBoost: 0.55,
-    overspeed: 0.2, overspeedAccel: 0.5,
-    maxSteer: 0.60, steerRate: 12, turnSlowdown: 0.04, engineRate: 12,
-    slipThreshold: 2.8, kineticGripRatio: 0.65,
-    rearGripBias: 0.82, liftoffOversteer: 0.22, tailSlip: 0.10,
-    powerOversteer: 0.38, handbrakeGrip: 0.22,
-    leanStrength: 0.03, leanLowSpeedAmp: 1.6,
-    brakeBiasFront: 0.66, weightTransfer: 0.16, accelTransfer: 0.15, brakeRamp: 14, lockupAt: 0.96, lockupGrip: 0.4,
-    ...RALLY_SUSPENSION,
-    suspensionStiffness: 45, suspensionCompression: 3.0, suspensionRelaxation: 4.7,
-    frictionSlip: 3.6, sideFrictionStiffness: 0.85,
-    visualScaleMultiplier: 2.0,
-    wheelZInset: 0.8, wheelXOffset: -0.12,
-  }),
 
   toyota: makeCar(TOYOTA),
 
@@ -282,4 +205,4 @@ export const CARS: Record<string, CarSpec> = {
   }),
 };
 
-export const DEFAULT_CAR = "toyota6";
+export const DEFAULT_CAR = "toyota";

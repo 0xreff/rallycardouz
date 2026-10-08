@@ -30,8 +30,10 @@ export class CarFX {
     private sparks: Sparks,
     private smoke: Smoke,
     private dust: Dust,
-    private surfaces?: SurfaceMap
-  ) {}
+    private surfaces?: SurfaceMap,
+    /** Which skid-mark slot group this car owns (4 trails each: player 0, bot 1). */
+    private slot = 0
+  ) { }
 
   /**
    * Throw sparks from the chassis wherever it actually touches something — at the
@@ -82,9 +84,17 @@ export class CarFX {
     });
   }
 
-  /** Lay a skid mark, tyre smoke and/or surface dust at one wheel's ground contact. */
+  /**
+   * Tyre marks, smoke and dust at one wheel's ground contact.
+   *
+   * Marks are a continuous ribbon per wheel (see SkidMarks): a dark, hard skid when
+   * the wheel slides/locks/burns out, and a faint tread print for any wheel rolling
+   * over loose ground (dirt) so the car leaves a visible trail across the desert.
+   */
   wheelContact(
+    wheel: number,
     cp: { x: number; y: number; z: number },
+    normal: { x: number; y: number; z: number },
     smokeIntensity: number,
     skidding: boolean,
     burningOut: boolean,
@@ -94,13 +104,24 @@ export class CarFX {
     wheelWidth: number,
     dustIntensity = 0
   ) {
-    if (skidding) {
-      const sp = Math.hypot(vx, vz);
-      if (sp > 1.5 || burningOut) {
-        const yaw = sp > 1.0 ? Math.atan2(vx, vz) : heading; // use heading when ~stationary
-        this.skids.add(cp.x, cp.y + 0.02, cp.z, yaw, wheelWidth * 1.1);
+    const key = this.slot * 4 + wheel;
+    const sp = Math.hypot(vx, vz);
+
+    let strength = 0;
+    if (skidding && (sp > 1.5 || burningOut)) strength = 0.9;
+    else if (dustIntensity > 0.05) strength = 0.22 + 0.25 * dustIntensity;
+
+    if (strength > 0) {
+      if (sp < 1.0 && burningOut) {
+        // Spinning in place: scrub a dark patch along the car's heading.
+        this.skids.stamp(key, cp, normal, heading, wheelWidth * 1.1, 1);
+      } else {
+        this.skids.addPoint(key, cp, normal, wheelWidth * 1.05, strength);
       }
+    } else {
+      this.skids.addPoint(key, cp, normal, wheelWidth, 0); // fade the trail out
     }
+
     if (smokeIntensity > 0.25) {
       this.smoke.emit(cp.x, cp.y + 0.05, cp.z, Math.min(3, Math.round(smokeIntensity * 3)), smokeIntensity);
     }
@@ -108,5 +129,10 @@ export class CarFX {
     if (dustIntensity > 0.15) {
       this.dust.emit(cp.x, cp.y + 0.05, cp.z, Math.min(3, Math.round(dustIntensity * 3)), dustIntensity, vx, vz);
     }
+  }
+
+  /** The wheel is off the ground: close its trail so it doesn't bridge a jump. */
+  wheelAir(wheel: number) {
+    this.skids.endTrail(this.slot * 4 + wheel);
   }
 }

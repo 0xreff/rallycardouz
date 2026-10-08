@@ -3,6 +3,7 @@ import type RAPIER from "@dimforge/rapier3d-compat";
 import { Physics } from "../physics/Physics";
 import { createRimMaterial } from "../engine/RimMaterial";
 import { SkidMarks } from "../engine/SkidMarks";
+import { CarLights } from "./CarLights";
 import { Sparks } from "../engine/Sparks";
 import { Smoke } from "../engine/Smoke";
 import { Dust } from "../engine/Dust";
@@ -77,6 +78,14 @@ const X_AXIS = new THREE.Vector3(1, 0, 0);
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 
+/** Per-instance options (the spec describes the car; these describe how it is used). */
+export interface CarOptions {
+  /** Skid-mark slot group (4 trails each). Player = 0, bot = 1. */
+  fxSlot?: number;
+  /** Add a real SpotLight headlight (costly on mobile — player only). */
+  headlightBeam?: boolean;
+}
+
 export class Car {
   readonly body: RAPIER.RigidBody;
   readonly spec: CarSpec;
@@ -102,6 +111,7 @@ export class Car {
   private burningOut = false; // throttle + brake/handbrake held stationary → burnout
   private burnoutSpin = 0;    // accumulated visual wheelspin for the driven wheels
   private gearbox = createGearbox(); // gear / rpm / shift + 6th-kick timers (see gearbox.ts)
+  private lights: CarLights;
   private fx: CarFX;          // sparks / skid marks / smoke / dust emitter
   private rotScratch = new THREE.Quaternion(); // reused for forward/right vector reads
   private physics: Physics;
@@ -164,11 +174,12 @@ export class Car {
     sparks: Sparks,
     smoke: Smoke,
     dust: Dust,
-    private surfaces?: SurfaceMap
+    private surfaces?: SurfaceMap,
+    opts: CarOptions = {}
   ) {
     const R = physics.rapier;
     this.spec = spec;
-    this.fx = new CarFX(skids, sparks, smoke, dust, surfaces);
+    this.fx = new CarFX(skids, sparks, smoke, dust, surfaces, opts.fxSlot ?? 0);
     this.physics = physics;
     this.topEndCap = spec.topSpeed; // starts at the limit, creeps up under sustained throttle
     this.spawnPos = spawn.clone();
@@ -238,6 +249,7 @@ export class Car {
     // --- Visuals (original low-poly geometry, sized from the spec) ---
     this.chassisMesh = this.buildChassis(spec);
     scene.add(this.chassisMesh);
+    this.lights = new CarLights(this.chassisMesh, spec, opts.headlightBeam ?? false);
 
     const wheelGeo = new THREE.CylinderGeometry(spec.wheelRadius, spec.wheelRadius, spec.wheelWidth, 18);
     wheelGeo.rotateZ(Math.PI / 2); // align cylinder axis to local X (the axle)
@@ -697,6 +709,7 @@ export class Car {
     // (1) Pedal pressure builds and releases smoothly instead of snapping on/off.
     const brakeInput = handbraking ? 1 : frontBraking ? controls.brake : 0;
     this.brakePressure += (brakeInput - this.brakePressure) * Math.min(1, spec.brakeRamp * dt);
+    this.lights.setBrake(this.brakePressure);
     const pressure = this.brakePressure;
 
     // Foot brake is front-biased (like a real car); the handbrake locks the rear.
@@ -1072,7 +1085,9 @@ export class Car {
         // Reconstruct the ground contact point from the synced wheel position
         const fxCp = this._fxCp.copy(world).addScaledVector(this._cnVec.set(cn.x, cn.y, cn.z), -this.spec.wheelRadius);
         // Skid mark + tyre smoke / surface dust at the ground contact (see CarFX).
-        this.fx.wheelContact(fxCp, this.wheelSmoke[i], this.wheelSkid[i], this.burningOut, lv.x, lv.z, heading, this.spec.wheelWidth, this.wheelDust[i]);
+        this.fx.wheelContact(i, fxCp, cn, this.wheelSmoke[i], this.wheelSkid[i], this.burningOut, lv.x, lv.z, heading, this.spec.wheelWidth, this.wheelDust[i]);
+      } else {
+        this.fx.wheelAir(i); // airborne wheel: end its trail so it doesn't bridge a jump
       }
 
       const q = this._wheelQ.identity()

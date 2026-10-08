@@ -6,9 +6,19 @@
       "off": "off_1000.wav"
     },
     {
+      "rpm": 1500,
+      "on": "on_1500.wav",
+      "off": "off_1500.wav"
+    },
+    {
       "rpm": 2000,
       "on": "on_2000.wav",
       "off": "off_2000.wav"
+    },
+    {
+      "rpm": 2700,
+      "on": "on_2700.wav",
+      "off": "off_2700.wav"
     },
     {
       "rpm": 3500,
@@ -16,9 +26,19 @@
       "off": "off_3500.wav"
     },
     {
+      "rpm": 4200,
+      "on": "on_4200.wav",
+      "off": "off_4200.wav"
+    },
+    {
       "rpm": 5000,
       "on": "on_5000.wav",
       "off": "off_5000.wav"
+    },
+    {
+      "rpm": 5700,
+      "on": "on_5700.wav",
+      "off": "off_5700.wav"
     },
     {
       "rpm": 6500,

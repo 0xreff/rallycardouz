@@ -1,15 +1,16 @@
 import * as THREE from "three";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
-import type { Quality } from "./NightAtmosphere";
+import type { Quality, Theme } from "./NightAtmosphere";
 
 /**
  * One full-screen pass that does two things, in linear HDR before tone mapping:
  *
  *  1. GOD RAYS (high quality only): a radial blur of the bright parts of the frame
- *     towards the moon's screen position. Hills, the car and anything dark in front
+ *     towards the moon's / sun's screen position. Hills, the car and anything dark in front
  *     of the moon naturally block the rays, so no depth/occlusion pass is needed.
  *     Placed after bloom, so it samples the moon's bloom halo (a large, easy target).
- *  2. COLOUR GRADE: violet split-toning (violet shadows, slightly cool highlights),
+ *  2. COLOUR GRADE: split-toning (night: violet shadows / cool highlights; desert-day:
+ *     warm rust shadows / golden highlights plus a lifted, dusty black point),
  *     a touch more saturation, and a soft vignette.
  *
  * Place it after UnrealBloomPass and before OutputPass.
@@ -36,6 +37,8 @@ const frag = (rays: boolean) => /* glsl */ `
   uniform vec3 uHighTint;
   uniform float uSaturation;
   uniform float uVignette;
+  uniform vec3 uLift;
+  uniform float uRayWidth;
   varying vec2 vUv;
 
   const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -53,7 +56,7 @@ const frag = (rays: boolean) => /* glsl */ `
       p += delta;
       vec3 s = texture2D(tDiffuse, p).rgb;
       float l = dot(s, LUMA);
-      acc += s * (smoothstep(uRayThreshold, uRayThreshold + 0.8, l) / max(l, 1e-4)) * l * decay;
+      acc += s * (smoothstep(uRayThreshold, uRayThreshold + uRayWidth, l) / max(l, 1e-4)) * l * decay;
       decay *= 0.94;
     }
     return acc / float(${RAY_SAMPLES});
@@ -77,6 +80,9 @@ const frag = (rays: boolean) => /* glsl */ `
     c = mix(c, c * uHighTint, high);
     c = mix(vec3(dot(c, LUMA)), c, uSaturation);
 
+    // Dusty air: lift the black point towards the haze colour (zero at night).
+    c += uLift * (1.0 - clamp(dot(c, LUMA), 0.0, 1.0));
+
     // Soft vignette.
     vec2 q = vUv - 0.5;
     c *= 1.0 - uVignette * smoothstep(0.28, 0.9, length(q) * 1.25);
@@ -89,20 +95,25 @@ export class AtmospherePass extends ShaderPass {
     private readonly _v = new THREE.Vector3();
     private readonly _q = new THREE.Quaternion();
 
-    constructor(private readonly moonDir: THREE.Vector3, quality: Quality) {
+    constructor(private readonly moonDir: THREE.Vector3, quality: Quality, theme: Theme = "night") {
         const rays = quality === "high";
+        const day = theme === "desert-day";
         super({
             uniforms: {
                 tDiffuse: { value: null },
                 uMoonUV: { value: new THREE.Vector2(0.5, 0.5) },
                 uMoonVis: { value: 0 },
-                uRayStrength: { value: 0.55 },
-                uRayThreshold: { value: 0.8 },
-                uRayColor: { value: new THREE.Color(0.62, 0.55, 1.0) },
-                uShadowTint: { value: new THREE.Color(1.1, 0.9, 1.3) },
-                uHighTint: { value: new THREE.Color(1.0, 1.0, 1.06) },
-                uSaturation: { value: 1.08 },
-                uVignette: { value: 0.35 },
+                // Day: the sun is far brighter than the hazy sky, so the threshold sits higher
+                // (otherwise the whole bright horizon would throw rays) and the rays are warm.
+                uRayStrength: { value: day ? 0.75 : 0.55 },
+                uRayThreshold: { value: day ? 1.7 : 0.8 },
+                uRayWidth: { value: day ? 1.6 : 0.8 },
+                uRayColor: { value: day ? new THREE.Color(1.0, 0.7, 0.38) : new THREE.Color(0.62, 0.55, 1.0) },
+                uShadowTint: { value: day ? new THREE.Color(1.06, 0.88, 0.8) : new THREE.Color(1.1, 0.9, 1.3) },
+                uHighTint: { value: day ? new THREE.Color(1.07, 1.0, 0.88) : new THREE.Color(1.0, 1.0, 1.06) },
+                uSaturation: { value: day ? 1.14 : 1.08 },
+                uVignette: { value: day ? 0.3 : 0.35 },
+                uLift: { value: day ? new THREE.Color(0.045, 0.024, 0.012) : new THREE.Color(0, 0, 0) },
             },
             vertexShader: VERT,
             fragmentShader: frag(rays),

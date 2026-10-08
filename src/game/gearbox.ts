@@ -45,10 +45,48 @@ export const DOWNSHIFT_CUT = 0.14; // s of power cut on a downshift (rev-match b
 export const MIN_GEAR_TIME = 0.6; // s a gear must be held before the next UPSHIFT
 export const RPM_FALL = 14000;    // rpm/s: how fast the revs drop while the clutch is in (snappy shift)
 export const RPM_RISE = 16000;    // rpm/s: how fast they climb (blip / launch)
-/** RPM the revs target during the clutch-in phase of an upshift (~3900-4000 zone). */
-export const SHIFT_LAND_RPM = 3950;
-/** ± variation around SHIFT_LAND_RPM so each shift feels slightly different. */
-export const SHIFT_LAND_VARY = 150;
+/** Centre of the landing zone the revs fall to during the clutch-in phase of an upshift. */
+export const SHIFT_LAND_RPM = 4800;
+/** ± variation around SHIFT_LAND_RPM: every upshift lands somewhere in 4600-5000 rpm. */
+export const SHIFT_LAND_VARY = 200;
+/**
+ * Protection floor: during an upshift the revs never sink below this, even if the car
+ * lost speed in the cut (hit, hill). The landing itself can never be higher than the
+ * wheel-speed rpm of the new gear, so 1st->2nd (a big ratio step) lands at ~4400.
+ */
+export const SHIFT_FLOOR_RPM = 4000;
+/**
+ * Load-aware upshifts (only when the caller passes a throttle value). The box will not
+ * change up while the car is braking, climbing or otherwise not pulling:
+ *  - the driver must be on the throttle (UPSHIFT_MIN_THROTTLE),
+ *  - the car must still be accelerating (UPSHIFT_MIN_ACCEL m/s², smoothed),
+ *  - the next gear must still leave the revs above MIN_UPSHIFT_RPM,
+ * unless the car is already past UPSHIFT_FORCE × the gear's top speed (on the limiter),
+ * where it shifts regardless so it can never get stuck screaming in a low gear.
+ */
+export const UPSHIFT_MIN_THROTTLE = 0.3;
+export const UPSHIFT_MIN_ACCEL = 1.2;   // m/s²: on a steep climb the box holds the gear instead of hunting
+export const DOWNSHIFT_HOLD = 0.9;      // s after a downshift before an upshift is allowed again (stops hunting)
+export const MIN_UPSHIFT_RPM = 4300;    // rpm the NEXT gear would show at the current speed
+export const UPSHIFT_FORCE = 1.04;      // × gear top speed: shift anyway
+
+/**
+ * Airborne free-rev. With no wheel contact the engine is unloaded: if the driver keeps
+ * the throttle down the revs run up toward the redline (and the audio's limiter), then
+ * snap back to the wheel-speed rpm the moment the tyres grip again.
+ *  - AIR_DEBOUNCE: wheels must be off the ground this long before it counts as a jump
+ *    (a small bump or kerb must not trigger it).
+ *  - AIR_REV_RATE: rpm/s the revs climb while airborne under throttle (a hop of a
+ *    fraction of a second only gives a small spike, a long jump hits the limiter).
+ *  - AIR_THROTTLE_MIN: below this the engine is not being fed, so no flare.
+ *  - LAND_SNAP_RATE / LAND_SNAP_TIME: after a real jump the revs fall back fast
+ *    (the driveline is suddenly loaded) instead of the slow lift-off rev-hang.
+ */
+export const AIR_DEBOUNCE = 0.08;       // s
+export const AIR_REV_RATE = 6500;       // rpm/s
+export const AIR_THROTTLE_MIN = 0.3;
+export const LAND_SNAP_RATE = 16000;    // rpm/s
+export const LAND_SNAP_TIME = 0.35;     // s
 export const UNLOCK_READY = 0.95; // fraction of FIFTH_TOP from which T can engage 6th
 export const SIXTH_RELOCK = 0.7;  // in 6th, below this fraction of FIFTH_TOP → back to 5th (locked); lower = 6th lives longer
 export const BOOST_TIME = 4.0;    // s of the 6th-gear push (fades out slowly)
@@ -84,6 +122,10 @@ export interface GearboxState {
   launch: number;     // 0..1 launch build-up on the line (1 = clutch dropped)
   kickTimer: number;  // s left of the launch kick
   idleT: number;      // s clock for the stopped-engine idle wander
+  lastV: number;      // m/s speed at the previous step (local, for accel)
+  accel: number;      // m/s² smoothed acceleration (local, for load-aware upshifts)
+  airT: number;       // s the wheels have been off the ground (local, 0 when grounded)
+  landT: number;      // s left of the post-jump fast rev drop (local)
   // --- local event counters (not synced) ---
   shiftSeq: number;   // +1 on every gear change
   shiftDir: number;   // direction of the LAST gear change: +1 up, -1 down
@@ -109,7 +151,7 @@ export function idleWanderRpm(t: number): number {
 export function createGearbox(): GearboxState {
   return {
     gear: 1, rpm: STOP_RPM, shiftTimer: 0, boostTimer: 0, gearTime: 0, launch: 0, kickTimer: 0,
-    idleT: 0, shiftSeq: 0, shiftDir: 0, launchSeq: 0,
+    idleT: 0, lastV: 0, accel: 0, airT: 0, landT: 0, shiftSeq: 0, shiftDir: 0, launchSeq: 0,
   };
 }
 
@@ -161,6 +203,20 @@ export function shiftPhase(s: GearboxState): number {
   return s.shiftTimer > SHIFT_RAMP ? 1 : 2;
 }
 
+/**
+ * Load-aware upshift gate. Holds the gear while braking, climbing or off the throttle,
+ * so the revs never fall away into a low landing after the shift. throttle < 0 = unknown.
+ */
+function upshiftAllowed(s: GearboxState, v: number, carTop: number, throttle: number): boolean {
+  if (throttle < 0) return true;
+  const top = gearTopSpeed(s.gear, carTop);
+  if (v >= top * UPSHIFT_FORCE) return true; // on the limiter: always shift
+  if (throttle < UPSHIFT_MIN_THROTTLE) return false;
+  if (s.accel < UPSHIFT_MIN_ACCEL) return false;
+  const nextRpm = COAST_RPM + (REDLINE_RPM - COAST_RPM) * clamp(v / gearTopSpeed(s.gear + 1, carTop), 0, 1);
+  return nextRpm >= MIN_UPSHIFT_RPM;
+}
+
 /** Advance the gearbox one fixed step. Mutates and returns s. */
 export function stepGearbox(
   s: GearboxState,
@@ -168,13 +224,30 @@ export function stepGearbox(
   carTop: number,
   unlockHeld: boolean,
   dt: number,
-  throttle = 0
+  throttle = -1, // -1 = unknown: the load-aware upshift rules are skipped (old behaviour)
+  airborne = false // true = no wheel in contact: the engine free-revs (see AIR_* above)
 ): GearboxState {
   s.shiftTimer = Math.max(0, s.shiftTimer - dt);
   s.boostTimer = Math.max(0, s.boostTimer - dt);
   s.kickTimer = Math.max(0, s.kickTimer - dt);
   s.gearTime += dt;
   const v = Math.max(0, speed);
+
+  // Smoothed acceleration: tells braking / climbing (falling speed) from real pull.
+  if (dt > 0) {
+    const inst = clamp((v - s.lastV) / dt, -40, 40);
+    s.accel += (inst - s.accel) * Math.min(1, dt * 6);
+  }
+  s.lastV = v;
+
+  // Airborne bookkeeping. `jumping` only turns on after AIR_DEBOUNCE so small bumps
+  // are ignored; on touch-down after a real jump the fast rev drop (landT) starts.
+  const wasJumping = s.airT >= AIR_DEBOUNCE;
+  s.airT = airborne ? s.airT + dt : 0;
+  const jumping = s.airT >= AIR_DEBOUNCE;
+  if (wasJumping && !jumping) s.landT = LAND_SNAP_TIME;
+  else if (jumping) s.landT = 0;
+  else s.landT = Math.max(0, s.landT - dt);
 
   // --- Launch: standing start in 1st with the throttle pinned.
   // Armed only from (almost) standstill, but once the build-up has begun it is latched:
@@ -202,7 +275,10 @@ export function stepGearbox(
   }
 
   const shiftedAt = s.gear;
-  if (s.gear === GEAR_COUNT) {
+  if (jumping) {
+    // in the air the gear is held: speed hasn't changed, and shifting mid-jump would
+    // only cut the revs we want to hear
+  } else if (s.gear === GEAR_COUNT) {
     if (v < FIFTH_TOP * SIXTH_RELOCK) {
       s.gear = GEAR_COUNT - 1; // fell off the pace: 6th locks again
       s.boostTimer = 0;
@@ -216,7 +292,8 @@ export function stepGearbox(
   } else if (
     s.gear < GEAR_COUNT - 1 &&
     s.gearTime >= MIN_GEAR_TIME &&
-    v >= gearTopSpeed(s.gear, carTop) * UPSHIFT_AT
+    v >= gearTopSpeed(s.gear, carTop) * UPSHIFT_AT &&
+    upshiftAllowed(s, v, carTop, throttle)
   ) {
     s.gear++;
     s.shiftTimer = SHIFT_CUT + SHIFT_RAMP;
@@ -225,7 +302,7 @@ export function stepGearbox(
     s.shiftTimer = DOWNSHIFT_CUT + 0.0001;
   }
   if (s.gear !== shiftedAt) {
-    s.gearTime = 0;
+    s.gearTime = s.gear < shiftedAt ? -DOWNSHIFT_HOLD : 0;
     s.shiftSeq++;
     s.shiftDir = s.gear > shiftedAt ? 1 : -1;
   }
@@ -243,16 +320,25 @@ export function stepGearbox(
   // Ensure the target is never below the floor (low speed in a tall gear).
   target = Math.max(target, floor);
 
-  // Shift-landing: during the clutch-in phase of an upshift, the revs target a
-  // specific landing zone (~3200 rpm ± variation) instead of the gear-speed RPM.
-  // Each shift gets a slightly different landing via a deterministic hash of shiftSeq.
-  // Once the clutch starts biting, the target returns to the real speed-based RPM
-  // and the engine climbs from ~3200 up — fast through mid-range, struggling at the top.
+  // Shift-landing: during the clutch-in phase of an upshift, the revs fall to a
+  // landing zone (SHIFT_LAND_RPM ± SHIFT_LAND_VARY = ~4600-5000 rpm) instead of
+  // following the gear-speed RPM. Each shift gets a slightly different landing via a
+  // deterministic hash of shiftSeq (so it is never a static number and stays in sync
+  // in multiplayer). The landing is a band, not a cap: if the car loses speed during
+  // the cut (sand, slope) the revs still hold at the bottom of the band instead of
+  // sinking to ~3500. Once the clutch starts biting, the target returns to the real
+  // speed-based RPM and the engine climbs from ~4800 up — fast through the mid-range,
+  // struggling at the top.
   if (isShifting(s) && s.shiftDir > 0) {
     // Deterministic per-shift variation: ±SHIFT_LAND_VARY based on shiftSeq
     const hash = Math.sin(s.shiftSeq * 127.1 + 0.7) * 0.5 + 0.5; // 0..1
     const vary = (hash - 0.5) * 2 * SHIFT_LAND_VARY; // -VARY..+VARY
-    target = Math.min(target, SHIFT_LAND_RPM + vary);
+    const landing = SHIFT_LAND_RPM + vary;
+    target = clamp(target, SHIFT_FLOOR_RPM, landing);
+  } else if (s.shiftTimer > 0 && s.shiftDir > 0) {
+    // Clutch biting after an upshift: the revs must not sink below the landing band
+    // (e.g. if the car lost speed during the cut); they climb from there instead.
+    target = Math.max(target, SHIFT_FLOOR_RPM);
   }
 
   if (isLaunching(s)) {
@@ -266,7 +352,14 @@ export function stepGearbox(
   // rate is RPM_FALL / RPM_RISE (the shift-drop sound).  During normal driving
   // it uses RPM_RISE going up (instant feel) and RPM_COAST_FALL going down (the
   // satisfying rev-hang when you lift off the throttle).
-  if (isShifting(s) || s.shiftTimer > 0 || isLaunching(s)) {
+  if (jumping && throttle >= AIR_THROTTLE_MIN) {
+    // Free-rev: unloaded engine runs up toward the redline at a finite rate.
+    const airTarget = REDLINE_RPM * clamp(throttle, 0, 1) + target * (1 - clamp(throttle, 0, 1));
+    s.rpm += clamp(Math.max(airTarget, target) - s.rpm, -RPM_COAST_FALL * dt, AIR_REV_RATE * dt);
+  } else if (s.landT > 0) {
+    // Just landed: the driveline is loaded again, the revs fall back fast to the wheels.
+    s.rpm += clamp(target - s.rpm, -LAND_SNAP_RATE * dt, RPM_RISE * dt);
+  } else if (isShifting(s) || s.shiftTimer > 0 || isLaunching(s)) {
     const down = RPM_FALL * dt, up = RPM_RISE * dt;
     s.rpm += clamp(target - s.rpm, -down, up);
   } else {

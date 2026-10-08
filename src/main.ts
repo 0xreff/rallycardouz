@@ -1,5 +1,6 @@
 import { Physics } from "./physics/Physics";
 import { Game } from "./game/Game";
+import { LightsPanel } from "./game/LightsPanel";
 
 async function boot() {
   const container = document.getElementById("app")!;
@@ -9,6 +10,7 @@ async function boot() {
     const physics = await Physics.create();
     const game = new Game(physics, container);
     game.start();
+    new LightsPanel(); // press L: edit the vehicle lights, Save to apply
 
     // Fade out the loading overlay.
     loader.style.opacity = "0";

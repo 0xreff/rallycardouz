@@ -17,7 +17,7 @@ export class Dust {
   private aLife: Float32Array;
   private cursor = 0;
 
-  constructor(scene: THREE.Scene, private max = 900) {
+  constructor(scene: THREE.Scene, private max = 1300) {
     this.pos = new Float32Array(max * 3).fill(-9999);
     this.vel = new Float32Array(max * 3);
     this.age = new Float32Array(max);
@@ -49,9 +49,9 @@ export class Dust {
           float tex = texture2D(uMap, gl_PointCoord).a;
           float fadeIn = smoothstep(0.0, 0.1, vLife);
           float fadeOut = 1.0 - smoothstep(0.35, 1.0, vLife);
-          float a = tex * fadeIn * fadeOut * 0.3;
+          float a = tex * fadeIn * fadeOut * 0.4;
           if (a < 0.01) discard;
-          gl_FragColor = vec4(vec3(0.60, 0.53, 0.42), a); // warm earthy tint
+          gl_FragColor = vec4(vec3(0.80, 0.55, 0.34), a); // warm amber desert dust (lit by the low sun)
         }
       `,
     });

@@ -12,7 +12,7 @@ import { SkidMarks } from "../engine/SkidMarks";
 import { Sparks } from "../engine/Sparks";
 import { Smoke } from "../engine/Smoke";
 import { Dust } from "../engine/Dust";
-import { NightAtmosphere, type Quality } from "../engine/NightAtmosphere";
+import { NightAtmosphere, type Quality, type Theme } from "../engine/NightAtmosphere";
 import { AtmospherePass } from "../engine/AtmospherePass";
 import { Car } from "./Car";
 import { CARS, DEFAULT_CAR } from "./CarSpec";
@@ -47,6 +47,9 @@ export class Game {
   // "low" on phones/tablets (no god rays, smaller shadow map, lower pixel ratio).
   // Override with ?quality=low or ?quality=high in the URL to test.
   private quality: Quality = detectQuality();
+  // "desert-day" (hazy amber daytime) or "night" (the original violet moonlit look).
+  // Override with ?theme=night or ?theme=day in the URL.
+  private theme: Theme = detectTheme();
   private speedEl: HTMLElement;
   private carNameEl: HTMLElement | null;
   private lastDisplayedSpeed = -1;
@@ -79,7 +82,7 @@ export class Game {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = this.theme === "night" ? 1.05 : 1.0;
     container.appendChild(this.renderer.domElement);
 
     // --- Camera ---
@@ -90,8 +93,6 @@ export class Game {
 
     // --- World ---
     this.track = new Track(physics, this.scene);
-    // Sand ripples + gust waves on the desert floor (map only).
-    this.atmosphere.applyGroundWind(this.track.terrain.material as THREE.MeshStandardMaterial);
     this.skids = new SkidMarks(this.scene); // persists across car swaps
     this.sparks = new Sparks(this.scene);   // collision sparks
     this.smoke = new Smoke(this.scene);     // tyre smoke
@@ -113,14 +114,15 @@ export class Game {
     // behaves best.
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    const day = this.theme === "desert-day";
     const bloom = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.55, // strength
-      0.6,  // radius
-      0.85  // threshold
+      day ? 0.38 : 0.55, // strength
+      day ? 0.7 : 0.6,   // radius
+      day ? 1.1 : 0.85   // threshold: by day only the sun and hot highlights bloom
     );
     this.composer.addPass(bloom);
-    this.atmospherePass = new AtmospherePass(this.atmosphere.moonDir, this.quality);
+    this.atmospherePass = new AtmospherePass(this.atmosphere.moonDir, this.quality, this.theme);
     this.composer.addPass(this.atmospherePass);
     this.composer.addPass(new OutputPass());
     const pr = this.renderer.getPixelRatio();
@@ -205,11 +207,12 @@ export class Game {
   }
 
   private setupEnvironment() {
-    // Violet moonlit desert night: sky dome + stars + moon, fog, moonlight with
-    // shadows, blowing sand. See engine/NightAtmosphere.ts to tune the look.
+    // Desert atmosphere: sky dome (sun or moon + stars), fog, key light with shadows,
+    // blowing sand. See engine/NightAtmosphere.ts (THEMES) to tune either look.
     this.atmosphere = new NightAtmosphere(this.scene, {
       quality: this.quality,
       pixelRatio: this.renderer.getPixelRatio(),
+      theme: this.theme,
     });
   }
 
@@ -363,7 +366,7 @@ export class Game {
           rpm: gb.rpm,
           throttle: controls.throttle,
           shifting: isShifting(gb),
-          limiter: controls.throttle > 0 && rpmFrac >= 0.97 && !this.car.isAirborne(),
+          limiter: controls.throttle > 0 && rpmFrac >= 0.97,
         },
         dt
       );
@@ -384,6 +387,13 @@ export class Game {
     };
     loop();
   }
+}
+
+function detectTheme(): Theme {
+  const forced = new URLSearchParams(window.location.search).get("theme");
+  if (forced === "night") return "night";
+  if (forced === "day" || forced === "desert-day") return "desert-day";
+  return "desert-day";
 }
 
 function detectQuality(): Quality {

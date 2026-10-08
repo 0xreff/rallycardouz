@@ -87,9 +87,10 @@ export class CarFX {
   /**
    * Tyre marks, smoke and dust at one wheel's ground contact.
    *
-   * Marks are a continuous ribbon per wheel (see SkidMarks): a dark, hard skid when
-   * the wheel slides/locks/burns out, and a faint tread print for any wheel rolling
-   * over loose ground (dirt) so the car leaves a visible trail across the desert.
+   * Marks are a continuous ribbon per wheel (see SkidMarks): a black rubber skid on
+   * tarmac when the wheel slides/locks/burns out, and a pressed tyre track with tread
+   * for any wheel rolling over loose ground (sand), so the car leaves a real trail
+   * across the desert.
    */
   wheelContact(
     wheel: number,
@@ -107,16 +108,19 @@ export class CarFX {
     const key = this.slot * 4 + wheel;
     const sp = Math.hypot(vx, vz);
 
+    // Loose ground (sand) takes a real tyre print: a pressed, sand-brown track with tread
+    // blocks that lasts a couple of minutes. Tarmac only shows black skid marks.
+    const onSand = dustIntensity > 0.05;
     let strength = 0;
-    if (skidding && (sp > 1.5 || burningOut)) strength = 0.9;
-    else if (dustIntensity > 0.05) strength = 0.22 + 0.25 * dustIntensity;
+    if (skidding && (sp > 1.5 || burningOut)) strength = onSand ? 1 : 0.9;
+    else if (onSand) strength = 0.62 + 0.3 * dustIntensity;
 
     if (strength > 0) {
       if (sp < 1.0 && burningOut) {
-        // Spinning in place: scrub a dark patch along the car's heading.
-        this.skids.stamp(key, cp, normal, heading, wheelWidth * 1.1, 1);
+        // Spinning in place: scrub a patch along the car's heading.
+        this.skids.stamp(key, cp, normal, heading, wheelWidth * 1.7, 1, onSand);
       } else {
-        this.skids.addPoint(key, cp, normal, wheelWidth * 1.05, strength);
+        this.skids.addPoint(key, cp, normal, wheelWidth * 1.55, strength, onSand);
       }
     } else {
       this.skids.addPoint(key, cp, normal, wheelWidth, 0); // fade the trail out

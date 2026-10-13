@@ -18,6 +18,41 @@ import { createGearbox, stepGearbox, driveMultiplier, speedCap, sixthReady, type
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CarSpec } from "./CarSpec";
 
+
+/** Convert a GLB material to RimMaterial while preserving the per-part PBR look. */
+function convertGlbMaterial(old: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
+  const n = createRimMaterial({
+    color: old.color,
+    metalness: old.metalness,
+    roughness: old.roughness,
+  });
+  n.map = old.map;
+  n.normalMap = old.normalMap;
+  n.normalScale.copy(old.normalScale);
+  n.roughnessMap = old.roughnessMap;
+  n.metalnessMap = old.metalnessMap;
+  n.aoMap = old.aoMap;
+  n.aoMapIntensity = old.aoMapIntensity;
+  n.emissive.copy(old.emissive);
+  n.emissiveMap = old.emissiveMap;
+  n.emissiveIntensity = old.emissiveIntensity;
+  n.alphaMap = old.alphaMap;
+  n.transparent = old.transparent;
+  n.opacity = old.opacity;
+  n.side = old.side;
+  n.alphaTest = old.alphaTest;
+  n.name = old.name;
+  return n;
+}
+
+function convertMeshMaterials(mesh: THREE.Mesh): void {
+  const conv = (m: THREE.Material) =>
+    (m as THREE.MeshStandardMaterial).isMeshStandardMaterial
+      ? convertGlbMaterial(m as THREE.MeshStandardMaterial)
+      : m;
+  mesh.material = Array.isArray(mesh.material) ? mesh.material.map(conv) : conv(mesh.material);
+}
+
 /**
  * Arcade RC car built on Rapier's raycast vehicle controller.
  *
@@ -352,23 +387,8 @@ export class Car {
             mesh.castShadow = true;
             mesh.receiveShadow = true;
 
-            // Convert GLB materials to our custom RimMaterial so they get the cool edge glow
-            // and don't look like flat black plastic due to the lack of an environment map!
-            if (mesh.material) {
-              const oldMat = mesh.material as THREE.MeshStandardMaterial;
-              if (oldMat.isMeshStandardMaterial) {
-                const newMat = createRimMaterial({
-                  color: oldMat.color,
-                  metalness: 0.15, // Low metalness so textures/colors remain visible without an HDRI
-                  roughness: 0.6,
-                });
-                newMat.map = oldMat.map;
-                newMat.normalMap = oldMat.normalMap;
-                newMat.roughnessMap = oldMat.roughnessMap;
-                newMat.metalnessMap = oldMat.metalnessMap;
-                mesh.material = newMat;
-              }
-            }
+            // Keep each part's own PBR values (body/tires/glass/chrome differ).
+            convertMeshMaterials(mesh);
           }
         });
         root.add(model);
@@ -556,15 +576,7 @@ export class Car {
       if (!mesh.isMesh) return;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      const oldMat = mesh.material as THREE.MeshStandardMaterial;
-      if (oldMat && oldMat.isMeshStandardMaterial) {
-        const newMat = createRimMaterial({ color: oldMat.color, metalness: 0.15, roughness: 0.6 });
-        newMat.map = oldMat.map;
-        newMat.normalMap = oldMat.normalMap;
-        newMat.roughnessMap = oldMat.roughnessMap;
-        newMat.metalnessMap = oldMat.metalnessMap;
-        mesh.material = newMat;
-      }
+      convertMeshMaterials(mesh);
     });
 
     if (import.meta.env.DEV) {

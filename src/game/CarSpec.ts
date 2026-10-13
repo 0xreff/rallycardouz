@@ -181,9 +181,6 @@ const TOYOTA: CarInput = {
   visualScaleMultiplier: 2.0, // fallback only: bumper-to-bumper = collider length
   wheelZInsetFront: 0.95, wheelZInsetRear: 0.95, // ~3.0 m wheelbase
   wheelXOffset: -0.13,
-  headX: 0.00,
-  headY: 0,
-  headZ: 0,
 };
 
 /**

@@ -4,6 +4,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
 import { Physics } from "../physics/Physics";
 import { Input } from "../engine/Input";
@@ -34,7 +35,7 @@ export class Game {
   private composer: EffectComposer;
   private stats: Stats;
   private perf!: PerfPanel; // debug toggles for finding the GPU bottleneck (press P)
-  private worldLights!: WorldLightsPanel; // press K: sun/moon, sky, fog, post FX, ground
+  worldLights!: WorldLightsPanel; // press K: sun/moon, sky, fog, post FX, ground
   private perfFlags = { cullFarTerrain: true };
   private frameNo = 0;
   private chase: ChaseCamera;
@@ -79,7 +80,7 @@ export class Game {
     right: new THREE.Vector3(),
     velocity: new THREE.Vector3(),
     speedFrac: 0, steer: 0, airborne: false, flipped: false, impact: 0,
-    lookLeft: false, lookRight: false,
+    lookLeft: false, lookRight: false, lookBack: false,
   };
 
   constructor(private physics: Physics, container: HTMLElement) {
@@ -94,6 +95,11 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = this.theme === "night" ? 1.05 : 1.0;
+    // Environment map so metals/paint/glass have something to reflect.
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = this.theme === "night" ? 0.35 : 0.6;
+    pmrem.dispose();
     container.appendChild(this.renderer.domElement);
 
     this.stats = new Stats({ trackGPU: true });

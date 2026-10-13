@@ -145,13 +145,11 @@ export class NightAtmosphere {
   private readonly sandMat: THREE.ShaderMaterial;
   private readonly timeU = { value: 0 };
   private readonly windDirU = { value: WIND_DIR.clone() };
-  private readonly def: ThemeDef;
 
   constructor(private readonly scene: THREE.Scene, opts: NightOptions = {}) {
     this.quality = opts.quality ?? "high";
     this.theme = opts.theme ?? "night";
     const T = THEMES[this.theme];
-    this.def = T;
     this.moonDir = T.keyDir.clone();
     this.groundUniforms = {
       glintColor: { value: T.glintColor.clone() },

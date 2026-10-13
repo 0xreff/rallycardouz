@@ -44,9 +44,10 @@ export class BotController {
     changeView: false,
     lookLeft: false,
     lookRight: false,
+    lookBack: false,
   };
 
-  constructor(private physics: Physics, private car: Car) {}
+  constructor(private physics: Physics, private car: Car) { }
 
   sample(dt: number): ControlState {
     const out = this.out;

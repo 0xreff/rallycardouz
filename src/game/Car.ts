@@ -12,6 +12,7 @@ import { SURFACES, SurfaceMap, type SurfaceProps } from "./Surfaces";
 import {
   nextImpact, creepTopEndCap, speedFraction as computeSpeedFraction, shouldHoldHandbrake,
   powerOversteer, airAttitudeRate, tiltAssist,
+  steerLockLimit, steerSlew, slideRamp, counterSteerAssist, nextHookup,
 } from "./handling";
 import { createGearbox, stepGearbox, driveMultiplier, speedCap, sixthReady, type GearboxState } from "./gearbox";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -49,7 +50,7 @@ const FRICTION_CIRCLE = 0.55;
 
 // Cosmetic body lean (visual only — the physics body never tips).
 const LEAN_RATE = 6;    // how fast the body roll eases toward its target
-const MAX_LEAN = 0.24;  // hard cap on the visual roll (~14°); real suspension roll adds to it
+const MAX_LEAN = 0.20;  // hard cap on the visual roll (~14°); real suspension roll adds to it
 
 // Rally landing assist (airborne only, no player input): the car's weight settles
 // it toward the flight path, kept between AIR_MIN_PITCH (nose down) and
@@ -96,7 +97,15 @@ export class Car {
   // replace the plain cylinders. Index order matches the physics: 0 FL, 1 FR, 2 BL, 3 BR.
   private modelWheels: (THREE.Object3D | null)[] = [null, null, null, null];
   private modelBrakes: (THREE.Object3D | null)[] = [null, null, null, null];
+  // Suspension arms/shocks found in the .glb (names containing susp/shock/wishbone/strut).
+  // Each is hinged at its body-side end and rotates/stretches so its outer end follows its wheel.
+  private suspLinks: { slot: number; pivot: THREE.Object3D; v0: THREE.Vector3; dir: THREE.Vector3 }[] = [];
+  private wheelRest: (THREE.Vector3 | null)[] = [null, null, null, null]; // model wheel centres at rest
+  private _suspD = new THREE.Vector3();
+  private _suspV = new THREE.Vector3();
   private steer = 0;
+  private wheelbase = 3;      // m, axle to axle (set from the wheel layout in the constructor)
+  private rearHookup = 1;     // 0..1 rear grip "hook-up": 0 with the handbrake pulled, recovers after release
   private appliedEngine = 0; // smoothed engine force (ref EngineRate ramp)
   private brakePressure = 0; // smoothed 0..1 brake "pedal" (pressure build-up)
   private visualLean = 0;    // cosmetic body roll (radians), eased toward the slide
@@ -145,6 +154,11 @@ export class Car {
   // syncMeshes() scratch
   private _chassisQuat = new THREE.Quaternion();
   private _leanRoll = new THREE.Quaternion();
+  private _leanInv = new THREE.Quaternion(); // inverse of the cosmetic lean, to keep model wheels planted
+  private _renderPos = new THREE.Vector3(); // un-shifted interpolated position (camera / shadows)
+  private _leanPivot = new THREE.Vector3();  // roll centre in chassis space (axle height)
+  private _leanShift = new THREE.Vector3();  // mesh shift that makes the lean pivot about the roll centre
+  private _wLocal = new THREE.Vector3();
   private _chassisMat = new THREE.Matrix4();
   private _oneVec = new THREE.Vector3(1, 1, 1);
   private _wheelWorld = new THREE.Vector3();
@@ -221,6 +235,7 @@ export class Car {
     const connZFront = spec.halfLength - (spec.wheelZInsetFront ?? spec.wheelZInset ?? 0.25);
     const connZRear = spec.halfLength - (spec.wheelZInsetRear ?? spec.wheelZInset ?? 0.25);
     const connX = spec.halfWidth + (spec.wheelXOffset ?? 0);
+    this.wheelbase = connZFront + connZRear;
 
     const wheelPositions = [
       new R.Vector3(-connX, connY, connZFront),   // FL
@@ -433,6 +448,33 @@ export class Car {
       this.modelBrakes[slot] = pivot;
     }
 
+    // Suspension arms / shocks: hinge each one at its body-side end (inner face) and let
+    // it rotate + stretch so its outer end stays on its wheel. Matched to the nearest wheel.
+    this.suspLinks.length = 0;
+    for (let i = 0; i < 4; i++) this.wheelRest[i] = centers[i]!.clone();
+    const suspRe = /susp|shock|wishbone|strut/i;
+    const suspParts = this.findNodes(model, suspRe, /wheel|tyre|tire|brake|caliper|rotor/i);
+    for (const part of suspParts) {
+      box.setFromObject(part, true);
+      const size = box.getSize(new THREE.Vector3());
+      const c = box.getCenter(new THREE.Vector3());
+      root.worldToLocal(c);
+      let slot = 0;
+      for (let i = 1; i < 4; i++) {
+        if (c.distanceToSquared(centers[i]!) < c.distanceToSquared(centers[slot]!)) slot = i;
+      }
+      const side = centers[slot]!.x < 0 ? -1 : 1;
+      const half = size.x / 2;
+      if (half < 1e-3) continue;
+      const inner = new THREE.Vector3(c.x - side * half, c.y, c.z); // body-side hinge
+      const pivot = new THREE.Group();
+      pivot.position.copy(inner);
+      root.add(pivot);
+      pivot.attach(part); // keeps the part exactly where it was
+      const v0 = new THREE.Vector3(side * 2 * half, 0, 0); // hinge -> wheel end, at rest
+      this.suspLinks.push({ slot, pivot, v0, dir: v0.clone().normalize() });
+    }
+
     // The real wheels are in use: hide the placeholder cylinders.
     this.wheelMeshes.forEach((m) => (m.visible = false));
   }
@@ -488,6 +530,7 @@ export class Car {
         x: avg("x"),
         y: avg("y"),
         radius: centres.reduce((s, w) => s + w.r, 0) / 4,
+        halfTrack: centres.reduce((s, w) => s + Math.abs(w.c.x - avg("x")), 0) / 4, // model's own half track
       };
     };
 
@@ -530,12 +573,19 @@ export class Car {
         `[CarSpec ${spec.name}] fitted model ${body.x.toFixed(2)} x ${body.y.toFixed(2)} x ${body.z.toFixed(2)} m ` +
         `(collider ${(2 * spec.halfWidth).toFixed(2)} x ${(2 * spec.halfHeight).toFixed(2)} x ${(2 * spec.halfLength).toFixed(2)} m). ` +
         `For a matching hitbox try halfWidth ~${(body.x / 2).toFixed(2)}, halfLength ~${(body.z / 2).toFixed(2)}. ` +
-        `Model tyre radius ${m.radius.toFixed(3)} m rescaled to wheelRadius ${spec.wheelRadius}.`
+        (spec.keepModelWheelSize
+          ? `Model tyre radius ${m.radius.toFixed(3)} m KEPT as-is: set wheelRadius to ${m.radius.toFixed(3)} (now ${spec.wheelRadius}).`
+          : `Model tyre radius ${m.radius.toFixed(3)} m rescaled to wheelRadius ${spec.wheelRadius}.`) +
+        ` TO MATCH BLENDER EXACTLY set: keepModelWheelSize: true, wheelRadius: ${m.radius.toFixed(3)}, ` +
+        `wheelXOffset: ${(m.halfTrack - spec.halfWidth).toFixed(3)} (model half track ${m.halfTrack.toFixed(3)} m, now ${(spec.halfWidth + (spec.wheelXOffset ?? 0)).toFixed(3)} m).`
       );
     }
 
     this.bindModelWheels(root, model);
-    const k = m.radius > 1e-3 ? spec.wheelRadius / m.radius : 1;
+    // keepModelWheelSize: leave the .glb's own tyre size alone (k = 1) instead of
+    // shrinking/growing it to spec.wheelRadius. Set spec.wheelRadius to the model radius
+    // logged above so the physics tyre matches the visible one.
+    const k = spec.keepModelWheelSize ? 1 : (m.radius > 1e-3 ? spec.wheelRadius / m.radius : 1);
     for (const p of this.modelWheels) p?.scale.setScalar(k);
     for (const p of this.modelBrakes) p?.scale.setScalar(k);
     return true;
@@ -630,8 +680,25 @@ export class Car {
     const coasting = controls.throttle === 0 && !handbraking && controls.brake === 0;
     const speedFrac = THREE.MathUtils.clamp(Math.abs(speed) / spec.topSpeed, 0, 1);
 
-    const steerTarget = -controls.steer * spec.maxSteer;
-    this.steer += (steerTarget - this.steer) * Math.min(1, spec.steerRate * dt);
+    // Steering: the driver commands a YAW RATE that grows with speed (steerYawLow ->
+    // steerYawHigh), so the front lock shrinks as speed rises (see steerLockLimit):
+    // progressive, smooth turn-in at low speed, strong authority when fast. The wheel
+    // angle is slew-limited so it never steps. In a slide, counter-steer assist points
+    // the fronts toward the direction of travel; the driver's own input fades it out.
+    const rearSlideT = slideRamp(lateralSpeed, speed, spec.slipThreshold, spec.slipAngle, spec.rearGripBias);
+    // With the handbrake pulled, or the rear not yet hooked up after it, the lock opens
+    // back up to full: a pivot needs the lock, and the driver needs it to catch the tail.
+    const slideAmt = handbraking ? 1 : 1 - this.rearHookup;
+    const lockLimit = THREE.MathUtils.lerp(
+      steerLockLimit(spec.maxSteer, this.wheelbase, speed, spec.steerYawLow, spec.steerYawHigh, speedFrac),
+      spec.maxSteer, slideAmt
+    );
+    const leftSlip = Math.atan2(-velVec.dot(right), Math.max(speed, 1)); // + = travelling left of the nose
+    const assist = airborne
+      ? 0
+      : counterSteerAssist(leftSlip, speed, spec.counterSteer, spec.counterSteerMax, spec.slipAngle, Math.abs(controls.steer));
+    const steerTarget = THREE.MathUtils.clamp(-controls.steer * lockLimit + assist, -spec.maxSteer, spec.maxSteer);
+    this.steer = steerSlew(this.steer, steerTarget, spec.steerRate, spec.steerSlew, dt);
     for (const i of FRONT) this.controller.setWheelSteering(i, this.steer);
 
     // Lift-off oversteer (grip): releasing the throttle mid-corner loosens the
@@ -688,8 +755,12 @@ export class Car {
     stepGearbox(this.gearbox, speed, spec.topSpeed, !!controls.unlockSixth, dt, controls.throttle, airborne);
     const speedLimit = speedCap(this.gearbox, this.topEndCap);
 
+    // A locked rear axle can't transmit drive: while the handbrake is held (above the
+    // burnout window) the engine is cut, so the pivot is clean and the driver has to get
+    // back on the throttle after release to drive out.
+    const driveCut = handbraking && !burnout;
     let engine = 0;
-    if (controls.throttle > 0) {
+    if (controls.throttle > 0 && !driveCut) {
       if (speed < speedLimit) {
         const steerAmount = Math.abs(controls.steer);
         const turnFactor = 1 - steerAmount * spec.turnSlowdown; // ease off in corners
@@ -729,11 +800,8 @@ export class Car {
     // ----- Lateral grip = drift slip model, then the braking modifiers above -----
     // Per-axle static→kinetic ramp: the rear breaks loose first (rearGripBias < 1)
     // → progressive, catchable oversteer rather than a snap.
-    const band = spec.slipThreshold;
-    const frontSlideT = THREE.MathUtils.clamp((lateralSpeed - spec.slipThreshold) / band, 0, 1);
-    const rearSlideT = THREE.MathUtils.clamp(
-      (lateralSpeed - spec.slipThreshold * spec.rearGripBias) / band, 0, 1
-    );
+    // The ramp trips on sideways speed (fast) OR slip angle (slow): see slideRamp.
+    const frontSlideT = slideRamp(lateralSpeed, speed, spec.slipThreshold, spec.slipAngle, 1);
     let frontSide = spec.sideFrictionStiffness * THREE.MathUtils.lerp(1.0, spec.kineticGripRatio, frontSlideT);
     let backSide = spec.sideFrictionStiffness * THREE.MathUtils.lerp(1.0, spec.kineticGripRatio, rearSlideT);
 
@@ -747,6 +815,18 @@ export class Car {
     // rear lock = the tail slides; the handbrake always locks the rear)
     frontSide *= THREE.MathUtils.lerp(1, spec.lockupGrip, frontLock);
     backSide *= THREE.MathUtils.lerp(1, handbraking ? spec.handbrakeGrip : spec.lockupGrip, rearLock);
+    // handbrake release → the rear hooks up gradually, and only fully under throttle while
+    // the car is still sliding: a pivot keeps its old course until the driver pushes. The
+    // front is eased off by the same ramp (hbFrontGrip) so the two axles stay balanced and
+    // the car slides along its course instead of spinning round to face backwards.
+    const slipAngleAbs = Math.atan2(lateralSpeed, Math.max(Math.abs(speed), 3));
+    this.rearHookup = nextHookup(
+      this.rearHookup, handbraking, controls.throttle, slipAngleAbs, spec.slipAngle, spec.hbRecoverTime, spec.hbHookup, dt
+    );
+    if (!handbraking) {
+      backSide *= THREE.MathUtils.lerp(spec.handbrakeGrip, 1, this.rearHookup);
+      frontSide *= THREE.MathUtils.lerp(spec.hbFrontGrip, 1, this.rearHookup);
+    }
     // lift-off oversteer → rear lets go a little, front bites a little more, so
     // releasing the throttle while turning rotates the car harder into the corner
     frontSide *= 1 + 0.3 * liftoff;
@@ -773,7 +853,7 @@ export class Car {
 
     // Flag which wheels are visibly skidding (→ skid marks): a wheel skids when the
     // car is sliding sideways, or its axle is locked (handbrake / hard braking).
-    const slidingLat = lateralSpeed > SKID_SLIP_SPEED;
+    const slidingLat = lateralSpeed > SKID_SLIP_SPEED || rearSlideT > 0.3;
     for (let i = 0; i < 4; i++) {
       const lock = FRONT.includes(i) ? frontLock : rearLock;
       this.wheelSkid[i] = slidingLat || lock > 0.4;
@@ -1007,7 +1087,7 @@ export class Car {
 
   /** Interpolated chassis position (matches the rendered mesh) — use for camera/shadows. */
   renderPosition(out: THREE.Vector3): THREE.Vector3 {
-    return out.copy(this.chassisMesh.position);
+    return out.copy(this._renderPos);
   }
 
   /** Interpolated forward (+Z) direction, without the cosmetic lean. */
@@ -1051,14 +1131,24 @@ export class Car {
     }
     this._renderRot.copy(curRot);
 
-    this.chassisMesh.position.copy(curPos);
-    // Add the cosmetic lean as an extra roll about the car's forward axis. The
-    // wheels (below) use the un-leaned chassisQuat so they stay on the ground.
+    this._renderPos.copy(curPos);
+    // Add the cosmetic lean as a roll about the car's forward axis, pivoting at the
+    // ROLL CENTRE (axle height) instead of the chassis centre. Rolling about the
+    // centre swings the body sideways away from the planted wheels.
     const leanRoll = this._leanRoll.setFromAxisAngle(Z_AXIS, this.visualLean);
+    const pivotY = -this.spec.halfHeight + 0.04 -
+      (this.spec.suspensionRest - Math.min(Physics.GRAVITY / (4 * this.spec.suspensionStiffness), this.spec.suspensionTravel));
+    const P = this._leanPivot.set(0, pivotY, 0);
+    // mesh origin shift = curRot * (P - lean * P): keeps P fixed while the body rolls
+    const shift = this._leanShift.copy(P).sub(this._wLocal.copy(P).applyQuaternion(leanRoll)).applyQuaternion(curRot);
+    this.chassisMesh.position.copy(curPos).add(shift);
     this.chassisMesh.quaternion.copy(curRot).multiply(leanRoll);
+    // Model wheels are children of chassisMesh, so they inherit the lean and shift.
+    // Cancel both for them (and their brakes): local = lean^-1 * (w - P) + P.
+    const leanInv = this._leanInv.copy(leanRoll).invert();
 
     const chassisMat = this._chassisMat.compose(
-      this.chassisMesh.position,
+      curPos,
       curRot,
       this._oneVec.set(1, 1, 1)
     );
@@ -1102,14 +1192,28 @@ export class Car {
       // space (no chassis matrix) and rotation is just steer (Y) then roll (X).
       const pivot = this.modelWheels[i];
       if (pivot) {
-        pivot.position.set(conn.x, conn.y - susp, conn.z);
-        pivot.quaternion.copy(this._steerQ).multiply(this._rollQ);
+        // Wheel position/orientation in UN-leaned chassis space, then pushed through the
+        // inverse lean so that (chassisMesh lean) x (inverse lean) = wheel stays on the ground.
+        pivot.position.set(conn.x, conn.y - susp, conn.z).sub(P).applyQuaternion(leanInv).add(P);
+        pivot.quaternion.copy(leanInv).multiply(this._steerQ).multiply(this._rollQ);
         const brake = this.modelBrakes[i];
         if (brake) {
           brake.position.copy(pivot.position);
-          brake.quaternion.copy(this._steerQ);
+          brake.quaternion.copy(leanInv).multiply(this._steerQ);
         }
       }
+    }
+
+    // Suspension arms: aim each one from its body-side hinge at its wheel's current
+    // position (chassis space) and stretch it to reach, so nothing is left dangling.
+    for (const L of this.suspLinks) {
+      const wheel = this.modelWheels[L.slot];
+      const rest = this.wheelRest[L.slot];
+      if (!wheel || !rest) continue;
+      const v1 = this._suspV.copy(L.v0).add(this._suspD.copy(wheel.position).sub(rest));
+      const ratio = THREE.MathUtils.clamp(v1.length() / L.v0.length(), 0.7, 1.6);
+      L.pivot.quaternion.setFromUnitVectors(L.dir, v1.normalize());
+      L.pivot.scale.set(ratio, 1, 1);
     }
   }
 
@@ -1171,6 +1275,7 @@ export class Car {
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.steer = 0;
+    this.rearHookup = 1;
     this.appliedEngine = 0;
     this.brakePressure = 0;
     this.visualLean = 0;
@@ -1232,6 +1337,7 @@ export class Car {
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.steer = 0;
+    this.rearHookup = 1;
     this.appliedEngine = 0;
     this.brakePressure = 0;
     this.visualLean = 0;

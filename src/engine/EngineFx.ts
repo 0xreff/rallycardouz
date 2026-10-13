@@ -42,15 +42,15 @@ const POP_HZ_MIN = 6;       // pops/s as the burst dies out
 const BURST_MIN = 0.7;      // s minimum burst duration
 const BURST_MAX = 2.3;      // s maximum burst duration (full revs)
 const JITTER = 0.35;        // ± fraction of the interval
-const DOUBLE_CHANCE = 0.15;  // probability of a quick double-pop
-const DOUBLE_GAP = 0.045;   // s between the two pops of a double
+const DOUBLE_CHANCE = 0.07;  // probability of a quick double-pop
+const DOUBLE_GAP = 0.08;   // s between the two pops of a double
 const POP_PITCH_SPREAD = 0.08; // ± pitch random variation
 const INITIAL_POP_VOLUME = 1.0; // volume of the first "bang"
 
 // Upshift pops
-const SHIFT_POP_MIN = 2;    // min pops per upshift
-const SHIFT_POP_MAX = 4;    // max pops per upshift
-const SHIFT_POP_INTERVAL = 0.04; // s between upshift pops
+const SHIFT_POP_MIN = 1;    // min pops per upshift
+const SHIFT_POP_MAX = 3;    // max pops per upshift
+const SHIFT_POP_INTERVAL = 0.07; // s between upshift pops
 
 // Turbo spool
 const SPOOL_RISE = 1.4;     // 1/s: how fast spool builds under load

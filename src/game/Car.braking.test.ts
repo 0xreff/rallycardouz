@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { Physics } from "../physics/Physics";
 import { Car } from "./Car";
-import { CARS } from "./CarSpec";
+import { CARS, type CarSpec } from "./CarSpec";
+
+// CarLights builds canvas textures; the headless physics tests don't need it.
+vi.mock("./CarLights", () => ({ CarLights: class { setBrake() {} } }));
+
+// A box-bodied copy of the Toyota (a spec name with no .glb is not model-loaded).
+const SIM_CAR: CarSpec = { ...CARS.toyota, name: "SimToyota" };
 
 const stopped = { throttle: 0, brake: 0, steer: 0, handbrake: false };
 const dt = Physics.FIXED_DT;
@@ -25,7 +31,7 @@ async function groundedCar() {
   const dust = { emit: vi.fn() };
   type Args = ConstructorParameters<typeof Car>;
   const car = new Car(
-    physics, new THREE.Scene(), new THREE.Vector3(0, 1, 0), CARS.bolt,
+    physics, new THREE.Scene(), new THREE.Vector3(0, 1, 0), SIM_CAR,
     skids as unknown as Args[4], sparks as unknown as Args[5],
     smoke as unknown as Args[6], dust as unknown as Args[7]
   );

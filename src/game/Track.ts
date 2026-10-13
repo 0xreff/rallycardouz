@@ -5,85 +5,111 @@ import { createRimMaterial } from "../engine/RimMaterial";
 import { SurfaceMap } from "./Surfaces";
 
 /**
- * A large open-world DESERT rally course made of nothing but sand:
+ * A HUGE open-world DESERT rally course made of nothing but sand:
  *
  *   1. DUNES: wind-driven sand dunes with a gentle windward slope and a steeper slip
- *      face, sinuous crests and a slow rolling swell under them. The dunes ease down to
- *      flat sand at the map edge, where the ground carries on to the horizon. The mesh and
- *      its physics collider are built from one shared vertex/index buffer (a trimesh), so
+ *      face, sinuous crests and a slow rolling swell under them. The same dune field is
+ *      simply carried on across a map MAP_SCALE (10) times bigger than the old one, and
+ *      eases down to flat sand at the map edge where the ground carries on to the horizon.
+ *      The visual mesh is cut into chunks (so the GPU can cull it) and the physics collider
+ *      is ONE heightfield built from the same height grid with the same triangulation, so
  *      the surface the car drives on is exactly the surface you see.
- *   2. A winding CURVED road: a closed Catmull-Rom loop laid over the sand as a trimesh
- *      ribbon with low curbs. The dunes are CUT AND FILLED along it (a smoothed height
- *      profile, flat across the road) so the road never gets buried or floats, but it
- *      still rolls gently so the car can get light.
- *   3. JUMP RAMPS along the course (gap jump, tabletop, kickers), each on a levelled pad.
+ *   2. SAND ROADS (no tarmac, no curbs): closed loops carved into the dunes as a flat,
+ *      packed-sand corridor. Both sides are walled by sand banks of DIFFERENT heights: a tall
+ *      wall on one side and a low berm on the other, each swelling and shrinking along the
+ *      road so the difference is easy to see from the driver's seat.
+ *   3. JUMP RAMPS (gap jump, tabletop, kickers), each on a levelled pad, and a few cones.
  *
- * The map edge is closed by invisible walls (colliders only). Every collider is
- * registered in the SurfaceMap with a surface type: the sand is DIRT (loose: less grip,
- * dust trails, tyre tracks), the road/curbs/ramps are TARMAC (full grip). Handling is
- * unchanged from the old map.
+ * The map edge is closed by invisible walls (colliders only). Every collider is registered
+ * in the SurfaceMap: the sand (dunes, roads and banks alike) is DIRT (loose: less grip, dust
+ * trails, tyre tracks), the ramps are TARMAC (full grip). Handling is unchanged.
  */
 
-const MAP = 700; // ground span
+const MAP_SCALE = 10;           // the map is this many times bigger than the original 700 m
+const MAP = 700 * MAP_SCALE;    // ground span (m)
 const HALF = MAP / 2;
-const SEG = 128; // terrain grid resolution (SEG x SEG cells, ~5.5 m)
+const SEG = 1280;               // terrain grid resolution (SEG x SEG cells, ~5.5 m like before)
+const CHUNK = 64;               // cells per visual chunk side (SEG must be a multiple)
 
 // The course starts here; the terrain is flattened into a pad around this point.
 const SPAWN_XZ = new THREE.Vector2(-200, -170);
 
 // --- Look & shape tuning -----------------------------------------------------
-const WIND_YAW = 0.42;      // rad: dune crests run perpendicular to this heading
-const DUNE_LAMBDA = 118;    // m between crests
+const WIND_YAW = 0.02;      // rad: dune crests run perpendicular to this heading
+const DUNE_LAMBDA = 218;    // m between crests
 const DUNE_CREST = 0.78;    // fraction of a wavelength spent climbing the windward side
-const ROAD_HALF_W = 9;      // road half-width
-const ROAD_BLEND_NEAR = 3;  // sand is levelled flat to the road this far beyond its edge...
-const ROAD_BLEND_FAR = 32;  // ...and blends back to full dunes by here
+const ROAD_HALF_W = 11;     // sand road half-width (flat packed floor)
+const ROAD_SHOULDER = 6;    // sand is levelled flat to the road this far beyond its edge...
+const ROAD_BLEND_FAR = 42;  // ...and blends back to full dunes by here
+const ROAD_SPACING = 6;     // m between road centreline samples
+const BANK_RISE = [1, 9];   // bank climbs from the road edge over these distances (m)
+const BANK_FALL = [13, 31]; // ...and falls back to the ground between these (m)
+const HASH_CELL = 128;      // road spatial-hash cell (m); must exceed ROAD_HALF_W + ROAD_BLEND_FAR
 
 interface Pad { x: number; z: number; r: number; h: number }
 
+/** One closed sand road. */
+interface Road {
+  pts: Float32Array;               // x,z pairs of the centreline
+  y: Float32Array;                 // smoothed height profile along it
+  n: number;                       // sample count (the loop is closed)
+  tallLeft: boolean;               // which side gets the tall sand wall
+  tall: [number, number, number, number]; // amp, swell1, swell2, phase of the tall wall
+  low: [number, number, number, number];  // same for the low berm
+  m: [number, number];             // whole number of wall swells around the loop (keeps the loop seamless)
+  hash: Map<number, number[]>;     // spatial hash: cell -> sample indices
+}
+
 const sstep = (x: number, a: number, b: number) => THREE.MathUtils.smoothstep(x, a, b);
+const hashKey = (ix: number, iz: number) => (ix + 128) * 512 + (iz + 128);
 
 export class Track {
   readonly spawn = new THREE.Vector3(SPAWN_XZ.x, 2, SPAWN_XZ.y);
 
-  /** The desert floor mesh (the Game adds the wind-ripple shader to its material). */
+  /**
+   * One chunk of the desert floor. The terrain is cut into many chunks that ALL share
+   * `terrainMaterial`, so anything applied to `terrain.material` (the wind-ripple shader)
+   * covers the whole map.
+   */
   terrain!: THREE.Mesh;
+  readonly terrainMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0.0 });
+  private readonly terrainGroup = new THREE.Group();
 
   // Collider-handle → surface registry: cars query this to know what each wheel
-  // is rolling on (tarmac road grips; sand terrain slides and kicks up dust).
+  // is rolling on (sand terrain slides and kicks up dust; ramps grip).
   readonly surfaces = new SurfaceMap();
 
   // Dynamic props (cones) whose meshes follow physics each frame.
   private props: { mesh: THREE.Mesh; body: RAPIER.RigidBody }[] = [];
 
-  // Road centreline (x,z pairs) and its smoothed height profile, built before the terrain.
-  private roadPts!: Float32Array;
-  private roadY!: Float32Array;
-  private roadN = 0;
+  // Sand roads (centreline + height profile + spatial hash), built before the terrain.
+  private roads: Road[] = [];
   private pads: Pad[] = [];
   private padsReady = false;
+
+  // Scratch results of the last sample()/nearRoad() call (avoids millions of allocations).
+  private hit = { d: 0, y: 0, k: 0, lat: 0, road: null as Road | null };
+  private sw = 1;   // dune weight of the last sample: 0 on the road corridor → 1 in the open dunes
+  private sm = 0;   // road-floor mask of the last sample: 1 on the packed road → 0 off it
 
   private warm = new THREE.Color(1.0, 0.72, 0.42); // sun-warmed rim light on props
 
   private mat = {
     ramp: createRimMaterial({ color: 0x55505c, metalness: 0.45, roughness: 0.55, rimColor: this.warm, rimStrength: 0.4 }),
-    road: new THREE.MeshStandardMaterial({ color: 0x51443d, roughness: 0.92, metalness: 0.0, side: THREE.DoubleSide }),
-    curb: createRimMaterial({ color: 0xcdbfa3, metalness: 0.0, roughness: 0.85, rimColor: this.warm, rimStrength: 0.25 }),
     cone: createRimMaterial({ color: 0xff5a1e, metalness: 0.2, roughness: 0.5, rimColor: this.warm, rimStrength: 0.4 }),
   };
 
   constructor(private physics: Physics, private scene: THREE.Scene) {
-    this.prepareRoad();
+    this.prepareRoads();
     this.preparePads();
     this.buildTerrain();
-    this.buildRoad();
     this.buildRamps();
     this.buildPerimeter();
   }
 
   // -------------------------------------------------------------- terrain
 
-  /** Raw sand dunes at a world (x,z), before the road corridor and ramp pads. */
+  /** Raw sand dunes at a world (x,z), before the sand roads and ramp pads. */
   private baseHeight(x: number, z: number): number {
     const d = Math.hypot(x - SPAWN_XZ.x, z - SPAWN_XZ.y);
     const flat = sstep(d, 26, 90); // 0 on the spawn pad → 1 in the dunes
@@ -116,44 +142,88 @@ export class Track {
 
     // Ease the dunes down to flat sand at the map edge so the ground meets the endless
     // sand plane beyond it with no step.
-    const edge = 1 - sstep(Math.max(Math.abs(x), Math.abs(z)), 295, 345);
+    const edge = 1 - sstep(Math.max(Math.abs(x), Math.abs(z)), 295 * MAP_SCALE, 345 * MAP_SCALE);
 
     return (amp * p + swell) * flat * edge;
   }
 
-  /** Nearest point on the road centreline: distance and the road's height there. */
-  private nearRoad(x: number, z: number): { d: number; y: number } {
-    const P = this.roadPts, Y = this.roadY, N = this.roadN;
-    let best = Infinity, bk = 0;
-    for (let k = 0; k < N; k++) {
-      const dx = P[2 * k] - x, dz = P[2 * k + 1] - z;
-      const dd = dx * dx + dz * dz;
-      if (dd < best) { best = dd; bk = k; }
+  /**
+   * Nearest sand road to a world (x,z). Fills `this.hit` with the distance to its centreline,
+   * the road height there, the fractional sample index along the road, and the signed
+   * lateral offset (+ = left of the driving direction). Returns false if no road is near.
+   */
+  private nearRoad(x: number, z: number): boolean {
+    const hit = this.hit;
+    hit.d = Infinity;
+    hit.road = null;
+    const ix = Math.floor(x / HASH_CELL), iz = Math.floor(z / HASH_CELL);
+    for (const road of this.roads) {
+      const P = road.pts, Y = road.y, N = road.n;
+      let best = Infinity, bk = -1;
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const list = road.hash.get(hashKey(ix + dx, iz + dz));
+          if (!list) continue;
+          for (let i = 0; i < list.length; i++) {
+            const k = list[i];
+            const ex = P[2 * k] - x, ez = P[2 * k + 1] - z;
+            const dd = ex * ex + ez * ez;
+            if (dd < best) { best = dd; bk = k; }
+          }
+        }
+      }
+      if (bk < 0) continue;
+      // Refine on the two segments touching the nearest sample.
+      for (let m = 0; m < 2; m++) {
+        const a = (bk - 1 + m + N) % N, b = (a + 1) % N;
+        const ax = P[2 * a], az = P[2 * a + 1], bx = P[2 * b], bz = P[2 * b + 1];
+        const ex = bx - ax, ez = bz - az;
+        const len2 = ex * ex + ez * ez || 1;
+        const t = THREE.MathUtils.clamp(((x - ax) * ex + (z - az) * ez) / len2, 0, 1);
+        const cx = ax + ex * t, cz = az + ez * t;
+        const d = Math.hypot(cx - x, cz - z);
+        if (d < hit.d) {
+          hit.d = d;
+          hit.y = Y[a] + (Y[b] - Y[a]) * t;
+          hit.k = a + t;
+          // left of travel = up × tangent = (tz, -tx)
+          hit.lat = ((x - cx) * ez - (z - cz) * ex) / Math.sqrt(len2);
+          hit.road = road;
+        }
+      }
     }
-    let bd = Infinity, by = Y[bk];
-    for (let m = 0; m < 2; m++) {
-      const a = (bk - 1 + m + N) % N, b = (a + 1) % N;
-      const ax = P[2 * a], az = P[2 * a + 1], bx = P[2 * b], bz = P[2 * b + 1];
-      const ex = bx - ax, ez = bz - az;
-      const len2 = ex * ex + ez * ez || 1;
-      const t = THREE.MathUtils.clamp(((x - ax) * ex + (z - az) * ez) / len2, 0, 1);
-      const d = Math.hypot(ax + ex * t - x, az + ez * t - z);
-      if (d < bd) { bd = d; by = Y[a] + (Y[b] - Y[a]) * t; }
-    }
-    return { d: bd, y: by };
+    return hit.road !== null;
   }
 
-  /** Height with the road corridor levelled in, but without ramp pads. */
-  private heightWithRoad(x: number, z: number): { h: number; w: number } {
+  /** Height of one bank (tall wall or low berm) beside a road at sample index k. */
+  private bankHeight(road: Road, k: number, tall: boolean): number {
+    const p = tall ? road.tall : road.low;
+    const th = (2 * Math.PI * k) / road.n; // periodic along the closed loop → no seam
+    return p[0] + p[1] * Math.sin(road.m[0] * th + p[3]) + p[2] * Math.sin(road.m[1] * th + p[3] * 1.7);
+  }
+
+  /**
+   * Ground height at a world (x,z): dunes, with the sand roads cut and filled in and their
+   * left/right banks raised on top. No ramp pads. Also sets `this.sw` and `this.sm`.
+   */
+  private sample(x: number, z: number): number {
     const b = this.baseHeight(x, z);
-    const r = this.nearRoad(x, z);
-    const w = sstep(r.d, ROAD_HALF_W + ROAD_BLEND_NEAR, ROAD_HALF_W + ROAD_BLEND_FAR); // 0 on the road → 1 in the dunes
-    return { h: r.y * (1 - w) + b * w, w };
+    if (!this.nearRoad(x, z)) { this.sw = 1; this.sm = 0; return b; }
+    const hit = this.hit, road = hit.road!;
+    const e = hit.d - ROAD_HALF_W; // distance beyond the road edge (negative on the road)
+    const w = sstep(hit.d, ROAD_HALF_W + ROAD_SHOULDER, ROAD_HALF_W + ROAD_BLEND_FAR);
+    this.sw = w;
+    this.sm = 1 - sstep(e, -2, 3);
+    let h = hit.y * (1 - w) + b * w;
+    const prof = sstep(e, BANK_RISE[0], BANK_RISE[1]) * (1 - sstep(e, BANK_FALL[0], BANK_FALL[1]));
+    if (prof > 0) h += prof * this.bankHeight(road, hit.k, hit.lat > 0 === road.tallLeft);
+    return h;
   }
 
-  /** Final terrain height at a world (x,z): dunes + road corridor + levelled ramp pads. */
+  /** Final terrain height at a world (x,z): dunes + sand roads/banks + levelled ramp pads. */
   private terrainHeight(x: number, z: number): number {
-    const { h, w } = this.heightWithRoad(x, z);
+    const h = this.sample(x, z);
+    const w = this.sw;
     if (!this.padsReady) return h;
     let out = h;
     for (const p of this.pads) {
@@ -165,44 +235,80 @@ export class Track {
     return out;
   }
 
-  /** Centreline of the road (closed loop) and a gently smoothed height profile along it. */
-  private prepareRoad() {
-    const ctrl: [number, number][] = [
-      [SPAWN_XZ.x, SPAWN_XZ.y],
-      [-70, -250],
-      [130, -220],
-      [250, -90],
-      [200, 70],
-      [250, 220],
-      [70, 250],
-      [-110, 200],
-      [-250, 120],
-      [-280, -40],
-    ];
-    const curve = new THREE.CatmullRomCurve3(
-      ctrl.map(([x, z]) => new THREE.Vector3(x, 0, z)),
-      true,
-      "catmullrom",
-      0.5
-    );
-    const N = 320;
-    const pts = curve.getSpacedPoints(N); // pts[N] == pts[0]
-    this.roadN = N;
-    this.roadPts = new Float32Array(N * 2);
-    const raw = new Float32Array(N);
-    for (let k = 0; k < N; k++) {
-      this.roadPts[2 * k] = pts[k].x;
-      this.roadPts[2 * k + 1] = pts[k].z;
-      raw[k] = this.baseHeight(pts[k].x, pts[k].z);
+  /** Closed loop of control points around (cx,cz), starting at angle phi0, going `dir` (±1) around. */
+  private static loopCtrl(cx: number, cz: number, r0: number, a1: number, a2: number, ph: number, dir: number, phi0: number) {
+    const pts: [number, number][] = [];
+    const K = 16;
+    for (let k = 0; k < K; k++) {
+      const phi = phi0 + (dir * 2 * Math.PI * k) / K;
+      const away = Math.abs(THREE.MathUtils.euclideanModulo(phi - phi0 + Math.PI, 2 * Math.PI) - Math.PI);
+      const wob = sstep(away, 0.45, 1.2); // calm around the start so the first straight is clean
+      const r = r0 + wob * (a1 * Math.sin(3 * phi + ph) + a2 * Math.sin(5 * phi + 2 * ph));
+      pts.push([cx + r * Math.cos(phi), cz + r * Math.sin(phi)]);
     }
-    // Moving average over +-5 samples (~65 m): keeps about half of each dune's height,
-    // so the road rolls over the dunes instead of cutting dead flat through them.
-    this.roadY = new Float32Array(N);
-    const W = 5;
-    for (let k = 0; k < N; k++) {
-      let sum = 0;
-      for (let j = -W; j <= W; j++) sum += raw[(k + j + N) % N];
-      this.roadY[k] = sum / (2 * W + 1);
+    return pts;
+  }
+
+  /**
+   * The sand roads: closed Catmull-Rom loops with a gently smoothed height profile.
+   *   A: the big west loop. It passes exactly through the spawn, heading +Z; the TALL wall is
+   *      on the left, the low berm on the right.
+   *   B: the east loop, which has the tall wall on the RIGHT instead.
+   */
+  private prepareRoads() {
+    const defs: { ctrl: [number, number][]; tallLeft: boolean; tall: Road["tall"]; low: Road["low"] }[] = [
+      {
+        ctrl: Track.loopCtrl(SPAWN_XZ.x - 1350, SPAWN_XZ.y, 1350, 150, 70, 0.7, +1, 0),
+        tallLeft: true,
+        tall: [5.6, 1.6, 0.9, 0.5],
+        low: [1.9, 0.6, 0.3, 2.0],
+      },
+      {
+        ctrl: Track.loopCtrl(1700, 0, 1150, 130, 60, 2.1, -1, Math.PI),
+        tallLeft: false,
+        tall: [6.2, 1.8, 1.0, 1.4],
+        low: [2.2, 0.7, 0.35, 0.3],
+      },
+    ];
+
+    for (const def of defs) {
+      const curve = new THREE.CatmullRomCurve3(
+        def.ctrl.map(([x, z]) => new THREE.Vector3(x, 0, z)),
+        true,
+        "catmullrom",
+        0.5
+      );
+      const len = curve.getLength();
+      const N = Math.ceil(len / ROAD_SPACING);
+      const sp = curve.getSpacedPoints(N); // sp[N] == sp[0]
+      const pts = new Float32Array(N * 2);
+      const raw = new Float32Array(N);
+      for (let k = 0; k < N; k++) {
+        pts[2 * k] = sp[k].x;
+        pts[2 * k + 1] = sp[k].z;
+        raw[k] = this.baseHeight(sp[k].x, sp[k].z);
+      }
+      // Moving average over +-5 samples (~60 m): keeps about half of each dune's height,
+      // so the road rolls over the dunes instead of cutting dead flat through them.
+      const y = new Float32Array(N);
+      const W = 5;
+      for (let k = 0; k < N; k++) {
+        let sum = 0;
+        for (let j = -W; j <= W; j++) sum += raw[(k + j + N) % N];
+        y[k] = sum / (2 * W + 1);
+      }
+      const hash = new Map<number, number[]>();
+      for (let k = 0; k < N; k++) {
+        const key = hashKey(Math.floor(pts[2 * k] / HASH_CELL), Math.floor(pts[2 * k + 1] / HASH_CELL));
+        let list = hash.get(key);
+        if (!list) hash.set(key, (list = []));
+        list.push(k);
+      }
+      this.roads.push({
+        pts, y, n: N, hash,
+        tallLeft: def.tallLeft, tall: def.tall, low: def.low,
+        m: [Math.max(2, Math.round(len / 450)), Math.max(3, Math.round(len / 150))],
+      });
     }
   }
 
@@ -213,13 +319,14 @@ export class Track {
       [230, 10, 24],                  // tabletop
       [-180, 150, 12], [-166, 150, 12], [-152, 150, 12], [-138, 150, 12], // kickers
     ];
-    this.pads = spots.map(([x, z, r]) => ({ x, z, r, h: this.heightWithRoad(x, z).h }));
+    this.pads = spots.map(([x, z, r]) => ({ x, z, r, h: this.sample(x, z) }));
     this.padsReady = true;
   }
 
   private static readonly SAND_LOW = new THREE.Color(0xb4602f);
   private static readonly SAND_MID = new THREE.Color(0xd98a45);
   private static readonly SAND_HIGH = new THREE.Color(0xf0b878);
+  private static readonly SAND_PACKED = new THREE.Color(0x8a5a38); // the trodden road floor
 
   /** Sand colour for a given ground height (used by the terrain and the far ground). */
   private sandColor(y: number, out: THREE.Color): THREE.Color {
@@ -229,71 +336,96 @@ export class Track {
   }
 
   /**
-   * Build the dune terrain. The collider is a TRIMESH built from the exact same
-   * vertices/indices as the visual mesh, so the surface the car drives on is
+   * Build the dune terrain. One shared height grid feeds BOTH the visual chunks and a single
+   * heightfield collider with the same triangulation, so the surface the car drives on is
    * guaranteed to be the surface you see.
    */
   private buildTerrain() {
     const R = this.physics.rapier;
     const n = SEG;
     const stride = n + 1;
+    const cell = MAP / n;
 
-    const geo = new THREE.BufferGeometry();
-    const pos = new Float32Array(stride * stride * 3);
-    const col = new Float32Array(stride * stride * 3);
+    // 1. Height + road-floor mask grid (rows → z, cols → x).
     const hs = new Float32Array(stride * stride);
-
-    for (let i = 0; i <= n; i++) {        // rows → z
-      for (let j = 0; j <= n; j++) {      // cols → x
+    const mk = new Float32Array(stride * stride);
+    for (let i = 0; i <= n; i++) {
+      const z = (i / n - 0.5) * MAP;
+      for (let j = 0; j <= n; j++) {
         const x = (j / n - 0.5) * MAP;
-        const z = (i / n - 0.5) * MAP;
-        const y = this.terrainHeight(x, z);
         const v = i * stride + j;
-        hs[v] = y;
-        pos[v * 3] = x;
-        pos[v * 3 + 1] = y;
-        pos[v * 3 + 2] = z;
+        hs[v] = this.terrainHeight(x, z);
+        mk[v] = this.sm; // set by the sample() call inside terrainHeight
       }
     }
 
-    // Sand colour: one smooth gradient with height (rust in the hollows, orange mid-slopes,
-    // pale gold on the crests). No patches or bands: the dune shapes and the low sun do
-    // the shading, so the ground never reads as a painted texture.
+    // 2. Visual chunks. Normals come from the global grid (central differences), so the
+    //    lighting is seamless across chunk borders.
     const tmp = new THREE.Color();
-    for (let v = 0; v < stride * stride; v++) {
-      this.sandColor(hs[v], tmp);
-      col[v * 3] = tmp.r;
-      col[v * 3 + 1] = tmp.g;
-      col[v * 3 + 2] = tmp.b;
-    }
-
-    const idx: number[] = [];
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        const a = i * stride + j;
-        const b = a + 1;
-        const c = a + stride;
-        const d = c + 1;
-        idx.push(a, c, b, b, c, d);
+    const cs = CHUNK + 1;
+    const idx = new Uint16Array(CHUNK * CHUNK * 6);
+    let q = 0;
+    for (let i = 0; i < CHUNK; i++) {
+      for (let j = 0; j < CHUNK; j++) {
+        const a = i * cs + j, b = a + 1, c = a + cs, d = c + 1;
+        idx[q++] = a; idx[q++] = c; idx[q++] = b;
+        idx[q++] = b; idx[q++] = c; idx[q++] = d;
       }
     }
-    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
-    geo.setIndex(idx);
-    geo.computeVertexNormals();
+    const idxAttr = new THREE.BufferAttribute(idx, 1);
 
-    const mesh = new THREE.Mesh(
-      geo,
-      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0.0 })
-    );
-    mesh.receiveShadow = true;
-    mesh.castShadow = true;
-    this.scene.add(mesh);
-    this.terrain = mesh;
+    const chunks = n / CHUNK;
+    for (let ci = 0; ci < chunks; ci++) {
+      for (let cj = 0; cj < chunks; cj++) {
+        const pos = new Float32Array(cs * cs * 3);
+        const nrm = new Float32Array(cs * cs * 3);
+        const col = new Float32Array(cs * cs * 3);
+        for (let i = 0; i < cs; i++) {
+          const gi = ci * CHUNK + i;
+          for (let j = 0; j < cs; j++) {
+            const gj = cj * CHUNK + j;
+            const g = gi * stride + gj;
+            const o = (i * cs + j) * 3;
+            pos[o] = (gj / n - 0.5) * MAP;
+            pos[o + 1] = hs[g];
+            pos[o + 2] = (gi / n - 0.5) * MAP;
 
+            const hL = hs[gi * stride + Math.max(gj - 1, 0)], hR = hs[gi * stride + Math.min(gj + 1, n)];
+            const hU = hs[Math.max(gi - 1, 0) * stride + gj], hD = hs[Math.min(gi + 1, n) * stride + gj];
+            const nx = (hL - hR) / (2 * cell), nz = (hU - hD) / (2 * cell);
+            const il = 1 / Math.hypot(nx, 1, nz);
+            nrm[o] = nx * il; nrm[o + 1] = il; nrm[o + 2] = nz * il;
+
+            // One smooth gradient with height (rust in the hollows, orange mid-slopes, pale
+            // gold on the crests: the tall bank reads paler than the low one), darkened on
+            // the packed road floor so the road is easy to follow.
+            this.sandColor(hs[g], tmp);
+            if (mk[g] > 0) tmp.lerp(Track.SAND_PACKED, mk[g] * 0.6);
+            col[o] = tmp.r; col[o + 1] = tmp.g; col[o + 2] = tmp.b;
+          }
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+        geo.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
+        geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+        geo.setIndex(idxAttr);
+        geo.computeBoundingSphere();
+        geo.computeBoundingBox();
+        const mesh = new THREE.Mesh(geo, this.terrainMaterial);
+        mesh.receiveShadow = true;
+        mesh.castShadow = true;
+        this.terrainGroup.add(mesh);
+        if (!this.terrain) this.terrain = mesh;
+      }
+    }
+    this.scene.add(this.terrainGroup);
+
+    // 3. One heightfield collider (column-major: heights[row + col * (n + 1)], rows → z, cols → x).
+    const heights = new Float32Array(stride * stride);
+    for (let r = 0; r <= n; r++) for (let c = 0; c <= n; c++) heights[r + c * stride] = hs[r * stride + c];
     const body = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed());
     const terrainCol = this.physics.world.createCollider(
-      R.ColliderDesc.trimesh(pos, new Uint32Array(idx)).setFriction(1.6),
+      R.ColliderDesc.heightfield(n, n, heights, { x: MAP, y: 1, z: MAP }).setFriction(1.6),
       body
     );
     this.surfaces.register(terrainCol.handle, "dirt");
@@ -301,7 +433,7 @@ export class Track {
     // Endless sand beyond the map edge: four big flat strips around the terrain (a single
     // plane would cover the dune hollows), same colour and material as the sand at the edge.
     const farMat = new THREE.MeshStandardMaterial({ color: this.sandColor(0, new THREE.Color()), roughness: 0.97, metalness: 0 });
-    const FAR = 3000;
+    const FAR = HALF + 3000;
     const strip = (x0: number, x1: number, z0: number, z1: number) => {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), farMat);
       m.rotation.x = -Math.PI / 2;
@@ -313,92 +445,6 @@ export class Track {
     strip(-FAR, FAR, -FAR, -HALF);        // south
     strip(-FAR, -HALF, -HALF, HALF);      // west
     strip(HALF, FAR, -HALF, HALF);        // east
-  }
-
-  // ----------------------------------------------------------------- road
-
-  /** The closed loop laid over the dunes as a trimesh ribbon with curbs. */
-  private buildRoad() {
-    const R = this.physics.rapier;
-    const raise = 0.5; // sit the road just above the terrain
-    const halfW = ROAD_HALF_W;
-    const curbH = 0.7;
-    const N = this.roadN;
-
-    const roadPos: number[] = [];
-    const roadIdx: number[] = [];
-    const curbPos: number[] = [];
-    const curbIdx: number[] = [];
-    const up = new THREE.Vector3(0, 1, 0);
-    const left: THREE.Vector3[] = [];
-    const right: THREE.Vector3[] = [];
-
-    for (let k = 0; k < N; k++) {
-      const px = this.roadPts[2 * k], pz = this.roadPts[2 * k + 1];
-      const nx = this.roadPts[2 * ((k + 1) % N)], nz = this.roadPts[2 * ((k + 1) % N) + 1];
-      const tan = new THREE.Vector3(nx - px, 0, nz - pz).normalize();
-      const side = new THREE.Vector3().crossVectors(up, tan).normalize();
-      const y = this.roadY[k] + raise;
-      const l = new THREE.Vector3(px + side.x * halfW, y, pz + side.z * halfW);
-      const r = new THREE.Vector3(px - side.x * halfW, y, pz - side.z * halfW);
-      left.push(l);
-      right.push(r);
-      roadPos.push(l.x, l.y, l.z, r.x, r.y, r.z);
-    }
-    for (let k = 0; k < N; k++) {
-      const a = (k * 2) % (N * 2); // left k
-      const b = a + 1; // right k
-      const c = (((k + 1) % N) * 2) % (N * 2); // left k+1
-      const d = c + 1; // right k+1
-      roadIdx.push(a, b, c, b, d, c);
-    }
-
-    // Curbs: a low vertical lip along each edge.
-    const pushCurb = (edge: THREE.Vector3[]) => {
-      const base = curbPos.length / 3;
-      for (const e of edge) {
-        curbPos.push(e.x, e.y, e.z, e.x, e.y + curbH, e.z);
-      }
-      for (let k = 0; k < N; k++) {
-        const a = base + (k * 2) % (N * 2);
-        const b = a + 1;
-        const c = base + (((k + 1) % N) * 2) % (N * 2);
-        const d = c + 1;
-        curbIdx.push(a, b, c, b, d, c);
-      }
-    };
-    pushCurb(left);
-    pushCurb(right);
-
-    const roadGeo = new THREE.BufferGeometry();
-    roadGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(roadPos), 3));
-    roadGeo.setIndex(roadIdx);
-    roadGeo.computeVertexNormals();
-    const roadMesh = new THREE.Mesh(roadGeo, this.mat.road);
-    roadMesh.receiveShadow = true;
-    this.scene.add(roadMesh);
-
-    const curbGeo = new THREE.BufferGeometry();
-    curbGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(curbPos), 3));
-    curbGeo.setIndex(curbIdx);
-    curbGeo.computeVertexNormals();
-    const curbMesh = new THREE.Mesh(curbGeo, this.mat.curb);
-    curbMesh.castShadow = true;
-    this.scene.add(curbMesh);
-
-    // Colliders (static trimeshes) — the paved line through the dunes.
-    const roadBody = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed());
-    const roadCol = this.physics.world.createCollider(
-      R.ColliderDesc.trimesh(new Float32Array(roadPos), new Uint32Array(roadIdx)).setFriction(1.8),
-      roadBody
-    );
-    this.surfaces.register(roadCol.handle, "tarmac");
-    const curbBody = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed());
-    const curbCol = this.physics.world.createCollider(
-      R.ColliderDesc.trimesh(new Float32Array(curbPos), new Uint32Array(curbIdx)).setFriction(1.0),
-      curbBody
-    );
-    this.surfaces.register(curbCol.handle, "tarmac");
   }
 
   // ---------------------------------------------------------------- ramps
@@ -481,7 +527,7 @@ export class Track {
 
     // Cone gates marking a couple of the sharper curves.
     const gates: [number, number][] = [
-      [240, -95], [255, -75], [185, 75], [205, 60],
+      [145, -45], [205, -25], [85, 45], [105, 30],
     ];
     for (const [x, z] of gates) this.cone(x, z);
   }
@@ -503,6 +549,22 @@ export class Track {
       const body = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, yC, z));
       const col = this.physics.world.createCollider(R.ColliderDesc.cuboid(dw / 2, h / 2, dd / 2), body);
       this.surfaces.register(col.handle, "wall");
+    }
+  }
+
+  /**
+   * Hide terrain chunks that lie entirely beyond `maxDist` (horizontal distance) from
+   * the camera. Past the fog's far distance a chunk is drawn fully fog-coloured, so it
+   * costs triangles and shows nothing. Call every few frames; pass Infinity to show all.
+   */
+  cullFarChunks(camX: number, camZ: number, maxDist: number) {
+    for (const obj of this.terrainGroup.children) {
+      const sphere = (obj as THREE.Mesh).geometry.boundingSphere;
+      if (!sphere) continue;
+      const dx = sphere.center.x - camX;
+      const dz = sphere.center.z - camZ;
+      const reach = maxDist + sphere.radius;
+      obj.visible = dx * dx + dz * dz < reach * reach;
     }
   }
 

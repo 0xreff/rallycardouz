@@ -21,12 +21,22 @@ import { BotController } from "./BotController";
 import { rpmFraction, isShifting, BOOST_TIME } from "./gearbox";
 import { EngineAudio } from "../engine/EngineAudio";
 import { EngineFx, type FxSink } from "../engine/EngineFx";
+import { WindAudio } from "../engine/WindAudio";
+import { onAudioSettingsChanged } from "./AudioSettings";
+import Stats from 'stats-gl';
+import { PerfPanel } from "./PerfPanel";
+import { WorldLightsPanel } from "./WorldLightsPanel";
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private composer: EffectComposer;
+  private stats: Stats;
+  private perf!: PerfPanel; // debug toggles for finding the GPU bottleneck (press P)
+  private worldLights!: WorldLightsPanel; // press K: sun/moon, sky, fog, post FX, ground
+  private perfFlags = { cullFarTerrain: true };
+  private frameNo = 0;
   private chase: ChaseCamera;
   private input = new Input();
   private car!: Car;
@@ -39,6 +49,7 @@ export class Game {
   private dust!: Dust;
   private engineAudio = new EngineAudio(); // Engine Simulator samples (see tools/make_engine_loops.py)
   private engineFx: EngineFx | null = null; // overrun crackle / turbo spool (initialised after audio loads)
+  private windAudio: WindAudio | null = null;   // speed-driven wind (synth now, recorded loop optional)
   private carKeys = Object.keys(CARS);
   private carIndex = this.carKeys.indexOf(DEFAULT_CAR);
   private clock = new THREE.Clock();
@@ -85,6 +96,9 @@ export class Game {
     this.renderer.toneMappingExposure = this.theme === "night" ? 1.05 : 1.0;
     container.appendChild(this.renderer.domElement);
 
+    this.stats = new Stats({ trackGPU: true });
+    document.body.appendChild(this.stats.dom);
+    this.stats.init(this.renderer);
     // --- Camera ---
     this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 3000);
     this.chase = new ChaseCamera(this.camera);
@@ -94,6 +108,8 @@ export class Game {
     // --- World ---
     this.track = new Track(physics, this.scene);
     this.skids = new SkidMarks(this.scene); // persists across car swaps
+    // Light the sand relief of the tracks with the same sun/moon as the map.
+    this.skids.setLight(this.atmosphere.moonDir, this.atmosphere.moonLight.color, this.theme === "night" ? 0.6 : 0.3);
     this.sparks = new Sparks(this.scene);   // collision sparks
     this.smoke = new Smoke(this.scene);     // tyre smoke
     this.dust = new Dust(this.scene);       // loose-surface dust trails
@@ -126,7 +142,30 @@ export class Game {
     this.composer.addPass(this.atmospherePass);
     this.composer.addPass(new OutputPass());
     const pr = this.renderer.getPixelRatio();
-    this.composer.addPass(new SMAAPass(window.innerWidth * pr, window.innerHeight * pr));
+    const smaa = new SMAAPass(window.innerWidth * pr, window.innerHeight * pr);
+    this.composer.addPass(smaa);
+
+    this.perf = new PerfPanel({
+      renderer: this.renderer,
+      composer: this.composer,
+      scene: this.scene,
+      sun: this.atmosphere.moonLight,
+      bloom,
+      atmosphere: this.atmospherePass,
+      smaa,
+      flags: this.perfFlags,
+    });
+
+    this.worldLights = new WorldLightsPanel({
+      theme: this.theme,
+      scene: this.scene,
+      renderer: this.renderer,
+      atmosphere: this.atmosphere,
+      bloom,
+      atmospherePass: this.atmospherePass,
+      skids: this.skids,
+      skidAmbient: this.theme === "night" ? 0.6 : 0.3, // same value as the skids.setLight() call above
+    });
 
     this.speedEl = document.querySelector("#speed .val")!;
     this.gearEl = document.querySelector("#gear");
@@ -140,7 +179,22 @@ export class Game {
     // After loading, create the overrun crackle/pop layer.
     void this.engineAudio.load().then(() => {
       this.engineFx = this.createEngineFx();
+      this.createWind();
     });
+  }
+
+  /**
+   * Wind layer: shares the engine's AudioContext and master bus (so it goes through
+   * the same compressor and volume). Uses a recorded loop if the manifest has a
+   * oneShots entry called "wind_loop", otherwise a synthesized noise wind.
+   */
+  private createWind() {
+    const ctx = this.engineAudio.getContext();
+    const master = this.engineAudio.getMaster();
+    if (!ctx || !master) return;
+    this.windAudio = new WindAudio(ctx, master);
+    const rec = this.engineAudio.getOneShotBuffer("wind_loop");
+    if (rec) this.windAudio.setSample(rec);
   }
 
   /**
@@ -153,8 +207,14 @@ export class Game {
     const master = this.engineAudio.getMaster();
     if (!ctx || !master) return null;
 
-    const POP_GAIN = 0.8;
-    const BOV_GAIN = 0.8;
+    let POP_GAIN = 0.8;
+    let BOV_GAIN = 0.8;
+
+    onAudioSettingsChanged((s) => {
+      POP_GAIN = s.crackleVolume;
+      BOV_GAIN = s.bovVolume;
+    });
+
     const MAX_VOICES = 8;
     let activeVoices = 0;
 
@@ -164,17 +224,34 @@ export class Game {
       const buf = this.engineAudio.getOneShotBuffer(`pop_${i}`);
       if (buf) popBuffers.push(buf);
     }
-    const bovBuffer = this.engineAudio.getOneShotBuffer("bov");
+    // BOV variants: "bov", then "bov_1", "bov_2", ... (same idea as the pops)
+    const bovBuffers: AudioBuffer[] = [];
+    const bov0 = this.engineAudio.getOneShotBuffer("bov");
+    if (bov0) bovBuffers.push(bov0);
+    for (let i = 0; i < 20; i++) {
+      const buf = this.engineAudio.getOneShotBuffer(`bov_${i}`);
+      if (buf) bovBuffers.push(buf);
+    }
+    let lastBov = -1;
 
-    if (popBuffers.length === 0 && !bovBuffer) {
+    if (popBuffers.length === 0 && bovBuffers.length === 0) {
       console.info("[EngineFx] No 'pop_X' or 'bov' oneShots found in manifest. Crackle FX disabled.");
       return null;
     }
 
-    // --- FX gain bus (routed through the master/compressor) ---
+    // --- FX gain bus (bypassing the engine compressor) ---
     const fxBus = ctx.createGain();
     fxBus.gain.value = 1;
-    fxBus.connect(master);
+
+    // Separate limiter for FX so loud pops don't clip or duck the engine
+    const fxLimiter = ctx.createDynamicsCompressor();
+    fxLimiter.threshold.value = -3;
+    fxLimiter.knee.value = 0;
+    fxLimiter.ratio.value = 20;
+    fxLimiter.attack.value = 0.001;
+    fxLimiter.release.value = 0.1;
+
+    fxBus.connect(fxLimiter).connect(ctx.destination);
 
     const sink: FxSink = {
       pop(intensity, variant, pitch) {
@@ -190,9 +267,15 @@ export class Game {
         src.start();
       },
       bov(intensity) {
-        if (activeVoices >= MAX_VOICES || !bovBuffer) return;
+        if (activeVoices >= MAX_VOICES || bovBuffers.length === 0) return;
+        // random variant, never the same one twice in a row
+        let v = Math.floor(Math.random() * bovBuffers.length);
+        if (bovBuffers.length > 1 && v === lastBov) {
+          v = (v + 1 + Math.floor(Math.random() * (bovBuffers.length - 1))) % bovBuffers.length;
+        }
+        lastBov = v;
         const src = ctx.createBufferSource();
-        src.buffer = bovBuffer;
+        src.buffer = bovBuffers[v];
         src.playbackRate.value = 0.9 + Math.random() * 0.2;
         const g = ctx.createGain();
         g.gain.value = intensity * BOV_GAIN;
@@ -228,6 +311,7 @@ export class Game {
     const spec = CARS[this.carKeys[index]];
     this.car = new Car(this.physics, this.scene, this.track.spawn, spec, this.skids, this.sparks, this.smoke, this.dust, this.track.surfaces, { fxSlot: 0, headlightBeam: true });
     if (this.carNameEl) this.carNameEl.textContent = spec.name;
+    void this.engineAudio.useEngineSet(spec.engineSound ?? "");
     this.lastDisplayedSpeed = -1; // force HUD refresh for the new car
     this.lastGear = "";
     this.lastRpmPct = -1;
@@ -323,6 +407,14 @@ export class Game {
       ct.lookBack = controls.lookBack;
       this.chase.update(ct, dt);
 
+      // Terrain chunks beyond the fog are drawn fully fog-coloured, so skip them. The 1.5
+      // factor covers the screen corners, where view depth is less than the distance.
+      if ((this.frameNo++ & 7) === 0) {
+        const fog = this.scene.fog as THREE.Fog | null;
+        const reach = this.perfFlags.cullFarTerrain && fog ? fog.far * 1.5 : Infinity;
+        this.track.cullFarChunks(this.camera.position.x, this.camera.position.z, reach);
+      }
+
       // Night atmosphere: sky follows the camera, moon shadows follow the car,
       // and the post pass tracks where the moon is on screen.
       this.atmosphere.update(dt, this.camera, cp);
@@ -371,6 +463,9 @@ export class Game {
         dt
       );
 
+      // Wind follows the real speed (m/s) from the same velocity read as the HUD.
+      this.windAudio?.update(Math.hypot(v.x, v.y, v.z), dt, ct.airborne);
+
       // Overrun crackle / turbo spool FX layer.
       if (this.engineFx) {
         this.engineFx.update(
@@ -384,6 +479,8 @@ export class Game {
       }
 
       this.composer.render();
+      this.perf.endFrame();
+      this.stats.update();
     };
     loop();
   }

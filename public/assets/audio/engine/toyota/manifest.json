@@ -1,0 +1,59 @@
+{
+  "points": [
+    {
+      "rpm": 1000,
+      "on": "on_1000.wav",
+      "off": "off_1000.wav"
+    },
+    {
+      "rpm": 1500,
+      "on": "on_1500.wav",
+      "off": "off_1500.wav"
+    },
+    {
+      "rpm": 2000,
+      "on": "on_2000.wav",
+      "off": "off_2000.wav"
+    },
+    {
+      "rpm": 2700,
+      "on": "on_2700.wav",
+      "off": "off_2700.wav"
+    },
+    {
+      "rpm": 3500,
+      "on": "on_3500.wav",
+      "off": "off_3500.wav"
+    },
+    {
+      "rpm": 4200,
+      "on": "on_4200.wav",
+      "off": "off_4200.wav"
+    },
+    {
+      "rpm": 5000,
+      "on": "on_5000.wav",
+      "off": "off_5000.wav"
+    },
+    {
+      "rpm": 5700,
+      "on": "on_5700.wav",
+      "off": "off_5700.wav"
+    },
+    {
+      "rpm": 6500,
+      "on": "on_6500.wav",
+      "off": "off_6500.wav"
+    }
+  ],
+  "oneShots": {
+    "pop_0": "pop_0.wav",
+    "pop_1": "pop_1.wav",
+    "pop_2": "pop_2.wav",
+    "pop_3": "pop_3.wav",
+    "pop_4": "pop_4.wav",
+    "bov": "bov.wav",
+    "bov_1": "bov_1.wav",
+    "bov_2": "bov_2.wav"
+  }
+}

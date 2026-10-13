@@ -1,0 +1,20 @@
+TOYOTA6 ENGINE SOUND - files to record (18 total)
+Put them in this folder, next to manifest.json.
+
+  ON  = throttle held, engine steady at that RPM
+  OFF = foot off the throttle (engine braking) at that same RPM
+
+  on_1000.wav   off_1000.wav
+  on_1500.wav   off_1500.wav
+  on_2000.wav   off_2000.wav
+  on_2700.wav   off_2700.wav
+  on_3500.wav   off_3500.wav
+  on_4200.wav   off_4200.wav
+  on_5000.wav   off_5000.wav
+  on_5700.wav   off_5700.wav
+  on_6500.wav   off_6500.wav
+
+Format (same as the default set): WAV, mono, 44100 Hz, 16-bit, about 3 seconds.
+Each file must loop seamlessly (no click at the end -> start).
+Keep the same loudness across all files; the game blends neighbours by RPM.
+If any file is missing the game keeps the default engine sound.

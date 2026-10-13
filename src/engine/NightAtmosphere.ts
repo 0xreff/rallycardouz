@@ -128,6 +128,16 @@ export class NightAtmosphere {
   readonly moonLight: THREE.DirectionalLight;
   readonly quality: Quality;
   readonly theme: Theme;
+  /** Sky fill light. Public so the in-game light panel can edit it. */
+  readonly hemi: THREE.HemisphereLight;
+  /** Live uniforms the light panel edits (sky dome, blowing sand, ground ripples/glints). */
+  readonly skyUniforms: THREE.ShaderMaterial["uniforms"];
+  readonly sandUniforms: THREE.ShaderMaterial["uniforms"];
+  readonly groundUniforms: {
+    glintColor: { value: THREE.Color };
+    glintGain: { value: number };
+    rippleGain: { value: number };
+  };
 
   private readonly sky: THREE.Mesh;
   private readonly skyMat: THREE.ShaderMaterial;
@@ -143,6 +153,11 @@ export class NightAtmosphere {
     const T = THEMES[this.theme];
     this.def = T;
     this.moonDir = T.keyDir.clone();
+    this.groundUniforms = {
+      glintColor: { value: T.glintColor.clone() },
+      glintGain: { value: T.glintGain },
+      rippleGain: { value: T.rippleGain },
+    };
     const high = this.quality === "high";
 
     scene.background = T.horizon.clone();
@@ -168,7 +183,8 @@ export class NightAtmosphere {
     this.moonLight = key;
 
     // Sky fill from above, warm bounce from the ground.
-    scene.add(new THREE.HemisphereLight(T.hemiSky, T.hemiGround, T.hemiIntensity));
+    this.hemi = new THREE.HemisphereLight(T.hemiSky, T.hemiGround, T.hemiIntensity);
+    scene.add(this.hemi);
 
     // --- Sky dome (follows the camera, drawn first, ignores depth/fog) ---
     this.skyMat = new THREE.ShaderMaterial({
@@ -192,6 +208,7 @@ export class NightAtmosphere {
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
     });
+    this.skyUniforms = this.skyMat.uniforms;
     this.sky = new THREE.Mesh(new THREE.SphereGeometry(2000, 32, 16), this.skyMat);
     this.sky.frustumCulled = false;
     this.sky.renderOrder = -1000;
@@ -222,10 +239,32 @@ export class NightAtmosphere {
       vertexShader: SAND_VERT,
       fragmentShader: SAND_FRAG,
     });
+    this.sandUniforms = this.sandMat.uniforms;
     this.sand = new THREE.Points(geo, this.sandMat);
     this.sand.frustumCulled = false;
     this.sand.renderOrder = 3;
     scene.add(this.sand);
+  }
+
+  /**
+   * Point the key light (moon / sun). Azimuth 0 = towards +Z (the spawn heading),
+   * elevation 0 = on the horizon, 90 = straight up. Updates the sky disc as well; the
+   * shadow light and the god-ray pass read `moonDir` every frame.
+   */
+  setKeyDirection(azimuthDeg: number, elevationDeg: number) {
+    const a = THREE.MathUtils.degToRad(azimuthDeg);
+    const e = THREE.MathUtils.degToRad(elevationDeg);
+    this.moonDir.set(Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e));
+    (this.skyUniforms.uMoonDir.value as THREE.Vector3).copy(this.moonDir);
+  }
+
+  /** Current key direction as { azimuth, elevation } in degrees. */
+  getKeyAngles() {
+    const d = this.moonDir;
+    return {
+      azimuth: THREE.MathUtils.radToDeg(Math.atan2(d.x, d.z)),
+      elevation: THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(d.y, -1, 1))),
+    };
   }
 
   /** Distance of the shadow light from the car along the key direction. */
@@ -240,9 +279,9 @@ export class NightAtmosphere {
   applyGroundWind(material: THREE.MeshStandardMaterial) {
     const timeU = this.timeU;
     const windDirU = this.windDirU;
-    const glintColorU = { value: this.def.glintColor.clone() };
-    const glintGainU = { value: this.def.glintGain };
-    const rippleGainU = { value: this.def.rippleGain };
+    const glintColorU = this.groundUniforms.glintColor;
+    const glintGainU = this.groundUniforms.glintGain;
+    const rippleGainU = this.groundUniforms.rippleGain;
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = timeU;
       shader.uniforms.uWindDir = windDirU;

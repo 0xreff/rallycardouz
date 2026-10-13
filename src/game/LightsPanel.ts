@@ -39,6 +39,8 @@ const SECTIONS: Section[] = [
         fields: [
             { kind: "toggle", key: "headOn", label: "Headlights on" },
             { kind: "color", key: "headColor", label: "Light colour" },
+            { kind: "slider", key: "headTilt", label: "Vertical tilt (0 = level horizontal)", min: -0.05, max: 0.15, step: 0.005 },
+            { kind: "slider", key: "headYaw", label: "Horizontal spread / yaw", min: -0.05, max: 0.2, step: 0.005 },
             { kind: "slider", key: "spotIntensity", label: "Road light brightness", min: 0, max: 1000, step: 10 },
             { kind: "slider", key: "spotAngle", label: "Road light width", min: 0.15, max: 0.9, step: 0.01 },
             { kind: "slider", key: "spotPenumbra", label: "Edge softness", min: 0, max: 1, step: 0.01 },
@@ -307,7 +309,7 @@ export class LightsPanel {
             input.min = String(f.min);
             input.max = String(f.max);
             input.step = String(f.step);
-            const decimals = f.step >= 1 ? 0 : f.step >= 0.1 ? 1 : 2;
+            const decimals = f.step >= 1 ? 0 : f.step >= 0.1 ? 1 : f.step >= 0.01 ? 2 : 3;
             input.addEventListener("input", () => {
                 const v = Number(input.value);
                 this.draft[key] = v;

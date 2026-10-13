@@ -43,19 +43,28 @@ export interface CarSpec {
   overspeedAccel: number; // how fast the top-speed cap creeps up past the limit (m/s²)
 
   // Steering.
-  maxSteer: number;      // radians at full lock
-  steerRate: number;     // how fast steering approaches the target
+  maxSteer: number;      // radians at full lock (standstill / crawling)
+  steerRate: number;     // how fast steering approaches the target (1/s, exponential)
+  steerSlew: number;     // rad/s: wheel angle can never move faster than this (progressive turn-in)
+  steerYawLow: number;   // rad/s yaw-rate authority at low speed: caps the front lock via the wheelbase
+  steerYawHigh: number;  // rad/s yaw-rate authority at top speed (> steerYawLow = strong steering when fast)
   turnSlowdown: number;  // 0..1, how much throttle eases off at full lock
   engineRate: number;    // how fast engine/reverse force ramps in
 
   // Static→kinetic grip model.
-  slipThreshold: number;    // m/s of lateral slip before the tyre breaks loose
+  slipThreshold: number;    // m/s of lateral slip before the tyre breaks loose (high speed trigger)
+  slipAngle: number;        // rad of body slip before the tyre breaks loose (low speed trigger: a little skid at any speed)
   kineticGripRatio: number; // 0..1 grip retained while sliding (lower = longer slides)
   rearGripBias: number;     // <1 → rear breaks loose earlier than the front
   liftoffOversteer: number; // 0..1 lift-off loosens the rear mid-corner
   tailSlip: number;         // 0..1 rear grip given up while cornering at speed
   powerOversteer: number;   // 0..1 throttle mid-corner loosens the driven rear (steer with the throttle)
   handbrakeGrip: number;    // 0..1 rear side grip left with the handbrake pulled (handbrake turns)
+  hbRecoverTime: number;    // s for the rear to hook back up after the handbrake is released
+  hbHookup: number;         // 0..1 rear grip it settles at while still sliding with NO throttle (throttle pushes it to 1)
+  hbFrontGrip: number;      // 0..1 front side grip right after release while the rear is unhooked (balances the axles: slide, don't spin)
+  counterSteer: number;     // 0..1+ assist gain: front wheels point toward the direction of travel in a slide
+  counterSteerMax: number;  // rad: most the counter-steer assist may add to the front wheel angle
 
   // Cosmetic body lean (visual only).
   leanStrength: number;
@@ -90,6 +99,8 @@ export interface CarSpec {
   wheelZInsetFront?: number;
   wheelZInsetRear?: number;
   wheelXOffset?: number;          // + pushes wheels outward from halfWidth (negative = tucked under the body)
+  engineSound?: string;           // sub-folder of public/assets/audio/engine/ with this car's own engine loops (unset = default sound)
+  keepModelWheelSize?: boolean;   // true: keep the .glb's own tyre size instead of rescaling it to wheelRadius (then set wheelRadius to the radius logged in dev)
 }
 
 type Vec3 = { x: number; y: number; z: number };
@@ -140,7 +151,9 @@ const RALLY_SUSPENSION = {
 };
 
 // Toyota pickup: shared by the Toyota and Toyota6 (same driving, different model).
-// Rear-biased AWD rally truck: throttle swings the tail, handbrake flicks it round.
+// Rear-wheel-drive Dakar-style rally truck: throttle swings the tail (power oversteer /
+// throttle steer), the handbrake pivots it, and after a pivot the rear only hooks back
+// up under power, so the driver has to push to drive out along the new heading.
 const TOYOTA: CarInput = {
   name: "Toyota",
   color: 0xdddddd,
@@ -151,21 +164,26 @@ const TOYOTA: CarInput = {
   inertiaScale: { x: 1, y: 0.65, z: 1.5 },
   linearDamping: 0.1, angularDamping: 0.35,
   engineAccel: 17, reverseAccel: 7, maxBrake: 24, handbrake: 4.5,
-  driveBias: { front: 0.35, back: 0.65 },
+  driveBias: { front: 0, back: 1 }, // RWD: all drive through the rear axle
   topSpeed: 48, launchSpeed: 14, launchBoost: 0.8,
   overspeed: 0.25, overspeedAccel: 1.2,
-  maxSteer: 0.68, steerRate: 16, turnSlowdown: 0.02, engineRate: 16,
-  slipThreshold: 2.5, kineticGripRatio: 0.58,
-  rearGripBias: 0.72, liftoffOversteer: 0.38, tailSlip: 0.20,
-  powerOversteer: 0.6, handbrakeGrip: 0.15,
+  maxSteer: 0.68, steerRate: 10, turnSlowdown: 0.02, engineRate: 16,
+  steerSlew: 3.0, steerYawLow: 1.12, steerYawHigh: 1.36,
+  slipThreshold: 2.5, slipAngle: 0.200, kineticGripRatio: 0.50,
+  rearGripBias: 1.00, liftoffOversteer: 0.38, tailSlip: 0.20,
+  powerOversteer: 0.46, handbrakeGrip: 0.23,
+  hbRecoverTime: 1.30, hbHookup: 0.56, hbFrontGrip: 0.30, counterSteer: 0.25, counterSteerMax: 0.10,
   leanStrength: 0.04, leanLowSpeedAmp: 1.8,
   brakeBiasFront: 0.65, weightTransfer: 0.25, accelTransfer: 0.15, brakeRamp: 20, lockupAt: 0.97, lockupGrip: 0.35,
   ...RALLY_SUSPENSION,
   suspensionStiffness: 38, suspensionCompression: 2.8, suspensionRelaxation: 4.3,
-  frictionSlip: 3.9, sideFrictionStiffness: 1.45,
+  frictionSlip: 1.82, sideFrictionStiffness: 1.90,
   visualScaleMultiplier: 2.0, // fallback only: bumper-to-bumper = collider length
   wheelZInsetFront: 0.95, wheelZInsetRear: 0.95, // ~3.0 m wheelbase
-  wheelXOffset: -0.13,                           // ~1.6 m track
+  wheelXOffset: -0.13,
+  headX: 0.00,
+  headY: 0,
+  headZ: 0,
 };
 
 /**
@@ -175,7 +193,8 @@ const TOYOTA: CarInput = {
  */
 export const CARS: Record<string, CarSpec> = {
 
-  toyota: makeCar(TOYOTA),
+  // Keeps the Blender tyre size (model tyres ~0.47 m radius at this fit); physics matches.
+  toyota: makeCar({ ...TOYOTA, keepModelWheelSize: true, wheelRadius: 0.443, wheelXOffset: 0, engineSound: "toyota" }),
 
   // Big pickup (Ram model).
   ram: makeCar({
@@ -190,10 +209,9 @@ export const CARS: Record<string, CarSpec> = {
     topSpeed: 44,
     angularDamping: 0.38,
     turnSlowdown: 0.03,
-    tailSlip: 0.10, weightTransfer: 0.15, powerOversteer: 0.5,
+    tailSlip: 0.10, weightTransfer: 0.15, powerOversteer: 0.33,
     visualRotationY: Math.PI,
     wheelZInsetFront: 1.125, wheelZInsetRear: 1.125, // ~3.55 m wheelbase
-    wheelXOffset: -0.12,
   }),
 
   // Same driving as the Toyota, different model. The model is auto-fitted to these
@@ -202,6 +220,8 @@ export const CARS: Record<string, CarSpec> = {
     ...TOYOTA,
     name: "Toyota6",
     modelFile: "toyota6.glb",
+    keepModelWheelSize: true, wheelRadius: 0.454, wheelXOffset: 0.037,
+    engineSound: "toyota6",
   }),
 };
 

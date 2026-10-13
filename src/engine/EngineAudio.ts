@@ -22,6 +22,8 @@ export interface EngineLoopPoint {
   off: string;
 }
 
+import { onAudioSettingsChanged } from "../game/AudioSettings";
+
 export interface EngineManifest {
   points: EngineLoopPoint[];
   limiter?: string;
@@ -69,7 +71,7 @@ export const LIMITER_CUT_RPM_DIP = 0.035;
 export const MIN_RATE = 0.6;
 export const MAX_RATE = 1.6;
 /** Master volume (loops are normalised to about -3 dBFS by the tool). */
-export const MASTER_VOLUME = 0.7;
+export const MASTER_VOLUME = 0.6;
 /** Airborne: the unloaded engine revs up a little above the gearbox rpm (0 = off). */
 export const AIR_FLARE_RPM = 800;
 export const AIR_RISE = 8;  // 1/s
@@ -137,11 +139,17 @@ interface Layer {
 export class EngineAudio {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  private compressor: DynamicsCompressorNode | null = null;
   private layers: Layer[] = [];
   private rpms: number[] = [];
   private limiterLayer: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
   private oneShots = new Map<string, AudioBuffer>();
   private fallback: FallbackSynth | null = null;
+  private baseUrl = "";
+  private loaded = false;
+  private swapping = false;
+  private currentSet = "";
+  private wantedSet = "";
 
   private unlocked = false;
   private revFrac = 0;
@@ -175,15 +183,21 @@ export class EngineAudio {
     if (!this.ctx) {
       this.ctx = new AudioContext();
       this.master = this.ctx.createGain();
-      this.master.gain.value = MASTER_VOLUME;
-      // Safety limiter: several loops add up, this keeps the sum from clipping.
-      const comp = this.ctx.createDynamicsCompressor();
-      comp.threshold.value = -10;
+      this.compressor = this.ctx.createDynamicsCompressor();
+      
+      const comp = this.compressor;
       comp.knee.value = 8;
-      comp.ratio.value = 8;
       comp.attack.value = 0.003;
       comp.release.value = 0.15;
       this.master.connect(comp).connect(this.ctx.destination);
+      
+      onAudioSettingsChanged((s) => {
+          if (this.master) this.master.gain.value = s.engineVolume;
+          if (this.compressor) {
+              this.compressor.threshold.value = s.compressorThreshold;
+              this.compressor.ratio.value = s.compressorRatio;
+          }
+      });
     }
     return this.ctx;
   }
@@ -196,6 +210,7 @@ export class EngineAudio {
 
   async load(baseUrl = `${import.meta.env.BASE_URL}assets/audio/engine/`): Promise<void> {
     const ctx = this.ensureContext();
+    this.baseUrl = baseUrl;
     try {
       const res = await fetch(baseUrl + "manifest.json");
       if (!res.ok) throw new Error(`manifest.json: HTTP ${res.status}`);
@@ -206,6 +221,8 @@ export class EngineAudio {
       const decode = async (file: string): Promise<AudioBuffer> => {
         const r = await fetch(baseUrl + file);
         if (!r.ok) throw new Error(`${file}: HTTP ${r.status}`);
+        const ct = r.headers.get("content-type");
+        if (ct && ct.includes("text/html")) throw new Error(`${file}: received HTML instead of audio`);
         return ctx.decodeAudioData(await r.arrayBuffer());
       };
 
@@ -216,7 +233,11 @@ export class EngineAudio {
       ]);
       if (manifest.oneShots) {
         for (const [name, file] of Object.entries(manifest.oneShots)) {
-          this.oneShots.set(name, await decode(file));
+          try {
+            this.oneShots.set(name, await decode(file));
+          } catch (e) {
+            console.warn(`[EngineAudio] failed to load oneShot "${name}" (${file}):`, e);
+          }
         }
       }
 
@@ -229,6 +250,9 @@ export class EngineAudio {
         const l = this.startLoop(limiterBuf, 0, "on");
         this.limiterLayer = { src: l.src, gain: l.gain };
       }
+      this.loaded = true;
+      this.currentSet = "";
+      if (this.wantedSet) void this.useEngineSet(this.wantedSet);
     } catch (err) {
       console.info(
         `[EngineAudio] samples not available (${(err as Error).message}); using the placeholder synth. ` +
@@ -237,6 +261,70 @@ export class EngineAudio {
       this.layers = [];
       this.limiterLayer = null;
       this.fallback = new FallbackSynth(ctx, this.master!);
+    }
+  }
+
+  /**
+   * Switch to another car's engine loops, stored in public/assets/audio/engine/<folder>/
+   * (manifest.json + on_<rpm>.wav / off_<rpm>.wav). "" = the default set. If the folder
+   * is missing or incomplete the current sound is kept. Pops, BOV and wind stay shared.
+   */
+  async useEngineSet(folder: string): Promise<void> {
+    this.wantedSet = folder;
+    if (!this.loaded || this.swapping) return;
+    this.swapping = true;
+    try {
+      while (this.currentSet !== this.wantedSet) {
+        const target = this.wantedSet;
+        await this.loadSet(target);
+        this.currentSet = target; // set even on failure so we never retry in a loop
+      }
+    } finally {
+      this.swapping = false;
+    }
+  }
+
+  private async loadSet(folder: string): Promise<void> {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const url = this.baseUrl + (folder ? `${folder}/` : "");
+    try {
+      const res = await fetch(url + "manifest.json");
+      if (!res.ok) throw new Error(`manifest.json: HTTP ${res.status}`);
+      const manifest = (await res.json()) as EngineManifest;
+      if (!manifest.points || manifest.points.length === 0) throw new Error("manifest has no points");
+      const points = [...manifest.points].sort((a, b) => a.rpm - b.rpm);
+      const decode = async (file: string): Promise<AudioBuffer> => {
+        const r = await fetch(url + file);
+        if (!r.ok) throw new Error(`${file}: HTTP ${r.status}`);
+        const ct = r.headers.get("content-type");
+        if (ct && ct.includes("text/html")) throw new Error(`${file}: received HTML instead of audio`);
+        return ctx.decodeAudioData(await r.arrayBuffer());
+      };
+      const [onBufs, offBufs] = await Promise.all([
+        Promise.all(points.map((p) => decode(p.on))),
+        Promise.all(points.map((p) => decode(p.off))),
+      ]);
+      if (manifest.oneShots) {
+        for (const [name, file] of Object.entries(manifest.oneShots)) {
+          try {
+            this.oneShots.set(name, await decode(file));
+          } catch (e) {
+            console.warn(`[EngineAudio] failed to load set oneShot "${name}" (${file}):`, e);
+          }
+        }
+      }
+      const next: Layer[] = [];
+      points.forEach((_, i) => {
+        next.push(this.startLoop(onBufs[i], i, "on"));
+        next.push(this.startLoop(offBufs[i], i, "off"));
+      });
+      const old = this.layers;
+      this.rpms = points.map((p) => p.rpm);
+      this.layers = next;
+      for (const l of old) { l.src.stop(); l.src.disconnect(); l.gain.disconnect(); }
+    } catch (err) {
+      console.info(`[EngineAudio] engine set "${folder || "default"}" not usable (${(err as Error).message}); keeping the current sound.`);
     }
   }
 
@@ -366,6 +454,7 @@ export class EngineAudio {
     void this.ctx?.close();
     this.ctx = null;
     this.master = null;
+    this.compressor = null;
   }
 }
 

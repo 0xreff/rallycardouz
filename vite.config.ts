@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import { resolve } from "path";
+import { existsSync } from "fs";
 
 // Rapier ships a .wasm file; Vite handles it as an asset automatically.
 // We exclude it from dep-optimization so the wasm loads correctly in dev.
@@ -13,7 +14,10 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
-        desert: resolve(__dirname, "desert/index.html"),
+        // only add the desert page if the folder actually exists
+        ...(existsSync(resolve(__dirname, "desert/index.html"))
+          ? { desert: resolve(__dirname, "desert/index.html") }
+          : {}),
       },
     },
   },

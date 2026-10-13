@@ -1,0 +1,54 @@
+--- a/src/game/Game.ts	2026-10-09 14:00:17.096524025 +0000
++++ b/src/game/Game.ts	2026-10-09 14:00:17.108417288 +0000
+@@ -21,6 +21,7 @@
+ import { rpmFraction, isShifting, BOOST_TIME } from "./gearbox";
+ import { EngineAudio } from "../engine/EngineAudio";
+ import { EngineFx, type FxSink } from "../engine/EngineFx";
++import { WindAudio } from "../engine/WindAudio";
+ 
+ export class Game {
+   private renderer: THREE.WebGLRenderer;
+@@ -39,6 +40,7 @@
+   private dust!: Dust;
+   private engineAudio = new EngineAudio(); // Engine Simulator samples (see tools/make_engine_loops.py)
+   private engineFx: EngineFx | null = null; // overrun crackle / turbo spool (initialised after audio loads)
++  private windAudio: WindAudio | null = null;   // speed-driven wind (synth now, recorded loop optional)
+   private carKeys = Object.keys(CARS);
+   private carIndex = this.carKeys.indexOf(DEFAULT_CAR);
+   private clock = new THREE.Clock();
+@@ -142,10 +144,25 @@
+     // After loading, create the overrun crackle/pop layer.
+     void this.engineAudio.load().then(() => {
+       this.engineFx = this.createEngineFx();
++      this.createWind();
+     });
+   }
+ 
+   /**
++   * Wind layer: shares the engine's AudioContext and master bus (so it goes through
++   * the same compressor and volume). Uses a recorded loop if the manifest has a
++   * oneShots entry called "wind_loop", otherwise a synthesized noise wind.
++   */
++  private createWind() {
++    const ctx = this.engineAudio.getContext();
++    const master = this.engineAudio.getMaster();
++    if (!ctx || !master) return;
++    this.windAudio = new WindAudio(ctx, master);
++    const rec = this.engineAudio.getOneShotBuffer("wind_loop");
++    if (rec) this.windAudio.setSample(rec);
++  }
++
++  /**
+    * Build the overrun crackle / turbo FX layer.  Uses the same AudioContext and
+    * master bus as EngineAudio so pops go through the compressor and gain knob.
+    * Loads real recordings from the manifest's oneShots ("pop_0", "pop_1", "bov").
+@@ -373,6 +390,9 @@
+         dt
+       );
+ 
++      // Wind follows the real speed (m/s) from the same velocity read as the HUD.
++      this.windAudio?.update(Math.hypot(v.x, v.y, v.z), dt, ct.airborne);
++
+       // Overrun crackle / turbo spool FX layer.
+       if (this.engineFx) {
+         this.engineFx.update(

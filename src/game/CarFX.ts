@@ -108,19 +108,28 @@ export class CarFX {
     const key = this.slot * 4 + wheel;
     const sp = Math.hypot(vx, vz);
 
-    // Loose ground (sand) takes a real tyre print: a pressed, sand-brown track with tread
-    // blocks that lasts a couple of minutes. Tarmac only shows black skid marks.
+    // Loose ground (sand): the tyre presses a groove and throws sand up on both sides.
+    // Rolling = shallow groove; sliding/locking/burning out = a deep, wide skid mark with
+    // more sand piled on the side the tyre slides toward. Tarmac only gets black rubber.
     const onSand = dustIntensity > 0.05;
+    const sliding = skidding && (sp > 1.5 || burningOut);
     let strength = 0;
-    if (skidding && (sp > 1.5 || burningOut)) strength = onSand ? 1 : 0.9;
-    else if (onSand) strength = 0.62 + 0.3 * dustIntensity;
+    if (sliding) strength = onSand ? 1 : 0.9;
+    else if (onSand) strength = 0.65 + 0.3 * dustIntensity;
+    const depth = sliding ? 1 : 0.5;
+
+    // Sideways slide of the car relative to where it points (m/s, world x/z).
+    const hx = Math.sin(heading), hz = Math.cos(heading);
+    const along = vx * hx + vz * hz;
+    const slide = { x: vx - along * hx, z: vz - along * hz };
 
     if (strength > 0) {
       if (sp < 1.0 && burningOut) {
         // Spinning in place: scrub a patch along the car's heading.
-        this.skids.stamp(key, cp, normal, heading, wheelWidth * 1.7, 1, onSand);
+        this.skids.stamp(key, cp, normal, heading, wheelWidth * 2.3, 1, onSand, 1);
       } else {
-        this.skids.addPoint(key, cp, normal, wheelWidth * 1.55, strength, onSand);
+        const w = onSand ? (sliding ? 2.3 : 1.95) : 1.6;
+        this.skids.addPoint(key, cp, normal, wheelWidth * w, strength, onSand, depth, slide);
       }
     } else {
       this.skids.addPoint(key, cp, normal, wheelWidth, 0); // fade the trail out

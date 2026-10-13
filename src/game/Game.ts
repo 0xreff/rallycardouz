@@ -337,6 +337,7 @@ export class Game {
         impact: 0,
         lookLeft: false,
         lookRight: false,
+        lookBack: false,
       });
     }
   }

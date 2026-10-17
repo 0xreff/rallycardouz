@@ -15,6 +15,7 @@
  * With no samples in public/assets/audio/engine/ it falls back to a crude
  * placeholder synth so the wiring can be tested.
  */
+const DEFAULT_SET = "toyota";
 
 export interface EngineLoopPoint {
   rpm: number;
@@ -184,19 +185,19 @@ export class EngineAudio {
       this.ctx = new AudioContext();
       this.master = this.ctx.createGain();
       this.compressor = this.ctx.createDynamicsCompressor();
-      
+
       const comp = this.compressor;
       comp.knee.value = 8;
       comp.attack.value = 0.003;
       comp.release.value = 0.15;
       this.master.connect(comp).connect(this.ctx.destination);
-      
+
       onAudioSettingsChanged((s) => {
-          if (this.master) this.master.gain.value = s.engineVolume;
-          if (this.compressor) {
-              this.compressor.threshold.value = s.compressorThreshold;
-              this.compressor.ratio.value = s.compressorRatio;
-          }
+        if (this.master) this.master.gain.value = s.engineVolume;
+        if (this.compressor) {
+          this.compressor.threshold.value = s.compressorThreshold;
+          this.compressor.ratio.value = s.compressorRatio;
+        }
       });
     }
     return this.ctx;
@@ -251,7 +252,7 @@ export class EngineAudio {
         this.limiterLayer = { src: l.src, gain: l.gain };
       }
       this.loaded = true;
-      this.currentSet = "";
+      this.currentSet = DEFAULT_SET;
       if (this.wantedSet) void this.useEngineSet(this.wantedSet);
     } catch (err) {
       console.info(

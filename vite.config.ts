@@ -1,23 +1,29 @@
 import { defineConfig } from "vite";
-import { resolve } from "path";
-import { existsSync } from "fs";
+import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 
-// Rapier ships a .wasm file; Vite handles it as an asset automatically.
-// We exclude it from dep-optimization so the wasm loads correctly in dev.
+const root = import.meta.dirname;
+
 export default defineConfig({
-  // Keep the static build portable between domain roots and Pages subpaths.
   base: "./",
   server: { host: true, port: 5173 },
   optimizeDeps: { exclude: ["@dimforge/rapier3d-compat"] },
   build: {
     target: "es2022",
-    rollupOptions: {
+    rolldownOptions: {
       input: {
-        main: resolve(__dirname, "index.html"),
-        // only add the desert page if the folder actually exists
-        ...(existsSync(resolve(__dirname, "desert/index.html"))
-          ? { desert: resolve(__dirname, "desert/index.html") }
+        main: resolve(root, "index.html"),
+        ...(existsSync(resolve(root, "desert/index.html"))
+          ? { desert: resolve(root, "desert/index.html") }
           : {}),
+      },
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: "rapier", test: /node_modules[\\/]@dimforge/, priority: 20 },
+            { name: "three", test: /node_modules[\\/]three/, priority: 10 },
+          ],
+        },
       },
     },
   },

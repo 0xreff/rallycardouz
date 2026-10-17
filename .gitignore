@@ -34,3 +34,26 @@ pnpm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+# Dependencies and build output
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor / OS / logs
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.log
+
+# Dev-only control panels (stay on your disk, never pushed).
+# Game.ts and main.ts load them optionally (import.meta.glob), so the pushed build works without them.
+# L: vehicle lights
+src/game/LightsPanel.ts
+# M: audio
+src/game/AudioPanel.ts
+# K: sun/moon, sky, fog, weather look
+src/game/WorldLightsPanel.ts
+# P: performance toggles
+src/game/PerfPanel.ts

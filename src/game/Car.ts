@@ -19,6 +19,12 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CarSpec } from "./CarSpec";
 
 
+// Wheel nodes inside a .glb. The spare wheel (Wheel_sc / Wheel_secour / spare) and the brake
+// parts must NOT count: with a spare the model reports 5 wheels, the fit gives up and the real
+// wheels never bind (the placeholder cylinders stay visible instead).
+const WHEEL_RE = /wheel|tyre|tire/i;
+const NOT_WHEEL_RE = /brake|caliper|rotor|_sc$|secour|spare/i;
+
 /** Convert a GLB material to RimMaterial while preserving the per-part PBR look. */
 function convertGlbMaterial(old: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
   const n = createRimMaterial({
@@ -85,7 +91,7 @@ const FRICTION_CIRCLE = 0.55;
 
 // Cosmetic body lean (visual only — the physics body never tips).
 const LEAN_RATE = 6;    // how fast the body roll eases toward its target
-const MAX_LEAN = 0.20;  // hard cap on the visual roll (~14°); real suspension roll adds to it
+const MAX_LEAN = 0.15;  // hard cap on the visual roll (~14°); real suspension roll adds to it
 
 // Rally landing assist (airborne only, no player input): the car's weight settles
 // it toward the flight path, kept between AIR_MIN_PITCH (nose down) and
@@ -303,29 +309,24 @@ export class Car {
 
     const wheelGeo = new THREE.CylinderGeometry(spec.wheelRadius, spec.wheelRadius, spec.wheelWidth, 18);
     wheelGeo.rotateZ(Math.PI / 2); // align cylinder axis to local X (the axle)
-    const useDebug = spec.name === "Tank" || spec.name === "Toyota";
-    const wheelMat = useDebug
-      ? new THREE.MeshBasicMaterial({ color: 0xff00aa, wireframe: true, transparent: true, opacity: 0.4 })
-      : createRimMaterial({ color: 0x14151a, metalness: 0.1, roughness: 0.8, rimStrength: 0.18 });
+    // Placeholder tyres: only visible when a model's own wheels can't be bound.
+    const wheelMat = createRimMaterial({ color: 0x14151a, metalness: 0.1, roughness: 0.8, rimStrength: 0.18 });
 
     for (let i = 0; i < 4; i++) {
       const m = new THREE.Mesh(wheelGeo, wheelMat);
-      m.castShadow = !useDebug;
+      m.castShadow = true;
       scene.add(m);
       this.wheelMeshes.push(m);
     }
   }
 
   private buildChassis(spec: CarSpec): THREE.Object3D {
-    if (spec.modelFile || spec.name === "Tank" || spec.name === "Toyota" || spec.name === "Ram") {
+    if (spec.modelFile || spec.name === "Toyota") {
       const root = new THREE.Group();
       const loader = new GLTFLoader();
 
       const assetBase = `${import.meta.env.BASE_URL}assets/`;
-      let glbPath = `${assetBase}d01c4c8e1685f8a60e41844cdde58a22.glb`;
-      if (spec.modelFile) glbPath = `${assetBase}${spec.modelFile}`;
-      else if (spec.name === "Toyota") glbPath = `${assetBase}toyota.glb`;
-      else if (spec.name === "Ram") glbPath = `${assetBase}ram.glb`;
+      const glbPath = `${assetBase}${spec.modelFile ?? "toyota.glb"}`;
 
       loader.load(glbPath, (gltf) => {
         const model = gltf.scene;
@@ -417,7 +418,7 @@ export class Car {
    */
   private bindModelWheels(root: THREE.Object3D, model: THREE.Object3D) {
     const brakeRe = /brake|caliper|rotor/i;
-    const wheels = this.findNodes(model, /wheel|tyre|tire/i, brakeRe);
+    const wheels = this.findNodes(model, WHEEL_RE, NOT_WHEEL_RE);
     const brakes = this.findNodes(model, brakeRe);
     if (wheels.length !== 4) {
       // Not an error: models with the wheels baked into the body keep the cylinders.
@@ -523,7 +524,7 @@ export class Car {
    * Returns false when 4 wheel nodes aren't found (caller uses the bounding-box fit).
    */
   private fitModelToPhysics(root: THREE.Object3D, model: THREE.Object3D, spec: CarSpec): boolean {
-    const wheels = this.findNodes(model, /wheel|tyre|tire/i, /brake|caliper|rotor/i);
+    const wheels = this.findNodes(model, WHEEL_RE, NOT_WHEEL_RE);
     if (wheels.length !== 4) return false;
 
     // Measure in the car's own frame: park the root at the origin. syncMeshes()

@@ -150,7 +150,7 @@ const RALLY_SUSPENSION = {
   suspensionRelaxation: 4.2,
 };
 
-// Toyota pickup: shared by the Toyota and Toyota6 (same driving, different model).
+// Toyota pickup: shared by the Toyota, Toyota6 and Toyota24 (same driving, different model).
 // Rear-wheel-drive Dakar-style rally truck: throttle swings the tail (power oversteer /
 // throttle steer), the handbrake pivots it, and after a pivot the rear only hooks back
 // up under power, so the driver has to push to drive out along the new heading.
@@ -190,26 +190,9 @@ const TOYOTA: CarInput = {
  */
 export const CARS: Record<string, CarSpec> = {
 
-  // Keeps the Blender tyre size (model tyres ~0.47 m radius at this fit); physics matches.
-  toyota: makeCar({ ...TOYOTA, keepModelWheelSize: true, wheelRadius: 0.443, wheelXOffset: 0, engineSound: "toyota" }),
-
-  // Big pickup (Ram model).
-  ram: makeCar({
-    ...TOYOTA,
-    name: "Ram",
-    color: 0xdd4444,
-    halfWidth: 1.0, halfHeight: 0.55, halfLength: 2.9, // ~5.8 m truck
-    wheelRadius: 0.42, wheelWidth: 0.3,
-    mass: 2400,
-    comOffset: { x: 0, y: -0.38, z: 0.05 },
-    engineAccel: 14, maxBrake: 52, handbrake: 5,
-    topSpeed: 44,
-    angularDamping: 0.38,
-    turnSlowdown: 0.03,
-    tailSlip: 0.10, weightTransfer: 0.15, powerOversteer: 0.33,
-    visualRotationY: Math.PI,
-    wheelZInsetFront: 1.125, wheelZInsetRear: 1.125, // ~3.55 m wheelbase
-  }),
+  // toyota.glb is auto-fitted to the physics wheels like the other two (its spare wheel is
+  // ignored). Keeps the Blender tyre size: radius / track measured from the model at this fit.
+  toyota: makeCar({ ...TOYOTA, keepModelWheelSize: true, wheelRadius: 0.448, wheelXOffset: -0.023, engineSound: "toyota" }),
 
   // Same driving as the Toyota, different model. The model is auto-fitted to these
   // physics wheels, so only touch visualYOffset/visualZOffset for small nudges.
@@ -219,6 +202,44 @@ export const CARS: Record<string, CarSpec> = {
     modelFile: "toyota6.glb",
     keepModelWheelSize: true, wheelRadius: 0.454, wheelXOffset: 0.037,
     engineSound: "toyota6",
+  }),
+
+  // Same driving as the Toyota, new model (toyota-24.glb: 4 wheel nodes, +Z forward, no rotation
+  // needed). Auto-fitted to the physics wheels like Toyota6. wheelRadius / wheelXOffset are the
+  // values measured from the model (wheelbase scaled to 3.0 m): re-check them against the
+  // "[CarSpec Toyota24] fitted model ..." dev console line and nudge visualYOffset/visualZOffset
+  // only if the tyres float or sink. Lights use the Toyota rig (rigOf matches "toyota").
+  toyota24: makeCar({
+    ...TOYOTA,
+    name: "Toyota24",
+    modelFile: "toyota-24.glb",
+    keepModelWheelSize: true, wheelRadius: 0.420, wheelXOffset: -0.078,
+    engineSound: "toyota", // reuses the Toyota engine loops (no toyota-24 recording yet)
+
+    // ---- Toyota24 "easy and powerful" tune (overrides the shared TOYOTA numbers) ----
+    // POWER: ~40% more pull, higher top speed, harder launch, quicker throttle response.
+    engineAccel: 24, topSpeed: 56, launchSpeed: 16, launchBoost: 1.0,
+    overspeedAccel: 1.8, engineRate: 20, maxBrake: 28,
+    // AWD (40% front): the front axle helps pull, so power no longer throws the tail out.
+    driveBias: { front: 0.4, back: 1 },
+    // CHANGING DIRECTION: more lock, faster wheel, more yaw authority (esp. at speed),
+    // and a lower yaw inertia so the nose swings round readily.
+    maxSteer: 0.75, steerRate: 14, steerSlew: 4.2,
+    steerYawLow: 1.3, steerYawHigh: 1.6,
+    inertiaScale: { x: 1, y: 0.55, z: 1.5 },
+    // SPEED STABILITY: more tyre grip, breaks loose later, keeps more grip when it does,
+    // tail doesn't step out on lift-off / power / cornering, calmer rotation, lower COM, firmer springs.
+    frictionSlip: 2.1, sideFrictionStiffness: 2.2,
+    slipThreshold: 3.2, slipAngle: 0.24, kineticGripRatio: 0.66,
+    tailSlip: 0.08, liftoffOversteer: 0.15, powerOversteer: 0.20,
+    angularDamping: 0.5, comOffset: { x: 0, y: -0.42, z: 0.1 }, leanStrength: 0.03,
+    suspensionStiffness: 42, suspensionCompression: 3.0, suspensionRelaxation: 4.6,
+    // HANDBRAKE STABILITY: rear keeps more side grip (controlled slide, not a spin), the front
+    // stays biting so the axles balance, the rear hooks back up fast, and counter-steer
+    // assist catches the slide for you.
+    handbrake: 5.5, handbrakeGrip: 0.32,
+    hbRecoverTime: 0.8, hbHookup: 0.75, hbFrontGrip: 0.5,
+    counterSteer: 0.6, counterSteerMax: 0.28,
   }),
 };
 

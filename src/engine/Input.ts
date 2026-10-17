@@ -12,8 +12,8 @@ export interface ControlState {
   recover: boolean;   // flip the car back onto its wheels in place
   cycleCar: boolean;  // switch to the next car in the roster
   changeView: boolean; // cycle camera views
-  lookLeft: boolean;  // swing camera 45deg left
-  lookRight: boolean; // swing camera 45deg right
+  lookLeft: boolean;  // swing camera 70deg left  (Q toggle)
+  lookRight: boolean; // swing camera 70deg right (E toggle)
   lookBack: boolean;  // swing camera 180deg back
 }
 
@@ -23,6 +23,12 @@ export class Input {
   private recoverEdge = false;
   private cycleEdge = false;
   private viewEdge = false;
+  private lookBackToggle = false;
+  private lookBackEdge = false;
+  private lookLeftToggle = false;
+  private lookLeftEdge = false;
+  private lookRightToggle = false;
+  private lookRightEdge = false;
 
   constructor() {
     window.addEventListener("keydown", (e) => {
@@ -31,8 +37,12 @@ export class Input {
         e.preventDefault();
       }
       this.keys.add(e.key.toLowerCase());
+      if (e.code) this.keys.add(e.code.toLowerCase());
     });
-    window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
+    window.addEventListener("keyup", (e) => {
+      this.keys.delete(e.key.toLowerCase());
+      if (e.code) this.keys.delete(e.code.toLowerCase());
+    });
     // Drop all keys if the window loses focus (avoids "stuck throttle").
     window.addEventListener("blur", () => this.keys.clear());
   }
@@ -64,9 +74,30 @@ export class Input {
     const changeView = viewDown && !this.viewEdge;
     this.viewEdge = viewDown;
 
-    const lookLeft = this.has("q");
-    const lookRight = this.has("e");
-    const lookBack = this.has("0");
+    // Q toggles look-left, E toggles look-right (one click on, another off)
+    const lookLeftDown = this.has("q");
+    if (lookLeftDown && !this.lookLeftEdge) {
+      this.lookLeftToggle = !this.lookLeftToggle;
+      if (this.lookLeftToggle) this.lookRightToggle = false; // mutual-exclusive
+    }
+    this.lookLeftEdge = lookLeftDown;
+    const lookLeft = this.lookLeftToggle;
+
+    const lookRightDown = this.has("e");
+    if (lookRightDown && !this.lookRightEdge) {
+      this.lookRightToggle = !this.lookRightToggle;
+      if (this.lookRightToggle) this.lookLeftToggle = false; // mutual-exclusive
+    }
+    this.lookRightEdge = lookRightDown;
+    const lookRight = this.lookRightToggle;
+
+    // 0 numpad / 0 tap-to-toggle: 1 tap/release switches to rear view, another tap/release switches back
+    const lookBackDown = this.has("0", "numpad0", "digit0");
+    if (lookBackDown && !this.lookBackEdge) {
+      this.lookBackToggle = !this.lookBackToggle;
+    }
+    this.lookBackEdge = lookBackDown;
+    const lookBack = this.lookBackToggle;
 
     // T is a held key (not edge-triggered) so a quick tap can't fall between two
     // physics substeps and get lost.

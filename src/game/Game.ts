@@ -4,7 +4,6 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
-import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
 import { Physics } from "../physics/Physics";
 import { Input } from "../engine/Input";
@@ -25,17 +24,28 @@ import { EngineFx, type FxSink } from "../engine/EngineFx";
 import { WindAudio } from "../engine/WindAudio";
 import { onAudioSettingsChanged } from "./AudioSettings";
 import Stats from 'stats-gl';
-import { PerfPanel } from "./PerfPanel";
-import { WorldLightsPanel } from "./WorldLightsPanel";
+import { setLightViewer, getLightSettings, setLightSettings } from "./CarLights";
+import { Weather } from "../engine/Weather";
+
+// Dev-only control panels (PerfPanel = P, WorldLightsPanel = K). Their files are gitignored: they
+// are used when present and skipped otherwise, so a checkout without them still builds and runs.
+interface PerfPanelLike { endFrame(): void }
+interface WorldLightsLike { switchLook(id: string): void }
+const optionalPanels = import.meta.glob<{
+  PerfPanel?: new (opts: Record<string, unknown>) => PerfPanelLike;
+  WorldLightsPanel?: new (opts: Record<string, unknown>) => WorldLightsLike;
+}>(["./PerfPanel.ts", "./WorldLightsPanel.ts"], { eager: true });
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private composer: EffectComposer;
+  private bloom!: UnrealBloomPass;
   private stats: Stats;
-  private perf!: PerfPanel; // debug toggles for finding the GPU bottleneck (press P)
-  worldLights!: WorldLightsPanel; // press K: sun/moon, sky, fog, post FX, ground
+  private perf?: PerfPanelLike; // debug toggles for finding the GPU bottleneck (press P)
+  worldLights?: WorldLightsLike; // press K: sun/moon, sky, fog, post FX, ground
+  private weather!: Weather;   // weather / time-of-day dropdown
   private perfFlags = { cullFarTerrain: true };
   private frameNo = 0;
   private chase: ChaseCamera;
@@ -95,11 +105,6 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = this.theme === "night" ? 1.05 : 1.0;
-    // Environment map so metals/paint/glass have something to reflect.
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = this.theme === "night" ? 0.35 : 0.6;
-    pmrem.dispose();
     container.appendChild(this.renderer.domElement);
 
     this.stats = new Stats({ trackGPU: true });
@@ -137,12 +142,13 @@ export class Game {
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     const day = this.theme === "desert-day";
-    const bloom = new UnrealBloomPass(
+    this.bloom = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
       day ? 0.38 : 0.55, // strength
       day ? 0.7 : 0.6,   // radius
       day ? 1.1 : 0.85   // threshold: by day only the sun and hot highlights bloom
     );
+    const bloom = this.bloom;
     this.composer.addPass(bloom);
     this.atmospherePass = new AtmospherePass(this.atmosphere.moonDir, this.quality, this.theme);
     this.composer.addPass(this.atmospherePass);
@@ -151,7 +157,8 @@ export class Game {
     const smaa = new SMAAPass(window.innerWidth * pr, window.innerHeight * pr);
     this.composer.addPass(smaa);
 
-    this.perf = new PerfPanel({
+    const PerfPanelCls = optionalPanels["./PerfPanel.ts"]?.PerfPanel;
+    this.perf = PerfPanelCls && new PerfPanelCls({
       renderer: this.renderer,
       composer: this.composer,
       scene: this.scene,
@@ -162,7 +169,8 @@ export class Game {
       flags: this.perfFlags,
     });
 
-    this.worldLights = new WorldLightsPanel({
+    const WorldLightsCls = optionalPanels["./WorldLightsPanel.ts"]?.WorldLightsPanel;
+    this.worldLights = WorldLightsCls && new WorldLightsCls({
       theme: this.theme,
       scene: this.scene,
       renderer: this.renderer,
@@ -173,6 +181,18 @@ export class Game {
       skidAmbient: this.theme === "night" ? 0.6 : 0.3, // same value as the skids.setLight() call above
     });
 
+    // --- Weather / time-of-day selector (dropdown at the top of the screen) ---
+    this.weather = new Weather({
+      scene: this.scene,
+      renderer: this.renderer,
+      atmosphere: this.atmosphere,
+      bloom,
+      atmospherePass: this.atmospherePass,
+      skids: this.skids,
+      quality: this.quality,
+      worldLights: this.worldLights,
+    });
+
     this.speedEl = document.querySelector("#speed .val")!;
     this.gearEl = document.querySelector("#gear");
     this.rpmEl = document.querySelector("#rpmBar");
@@ -180,11 +200,28 @@ export class Game {
 
     window.addEventListener("resize", () => this.onResize());
 
+    // --- Numpad 1-6: toggle individual light groups ---
+    // 1 = headlights, 2 = tail lights, 3 = front amber, 4 = rear amber, 5 = roof bar, 6 = upper round lamps
+    window.addEventListener("keydown", (e) => {
+      const map: Record<string, keyof import("./CarLights").LightSettings> = {
+        "Numpad1": "headOn", "Numpad2": "tailOn", "Numpad3": "amberOn",
+        "Numpad4": "amberTailOn", "Numpad5": "barOn", "Numpad6": "topOn",
+      };
+      const field = map[e.code];
+      if (!field) return;
+      const cur = getLightSettings();
+      setLightSettings({ [field]: !cur[field] } as Partial<import("./CarLights").LightSettings>, false);
+    });
+
     // Start fetching/decoding the engine loops now; sound begins on the first key
     // press (browsers block audio until the player interacts with the page).
     // After loading, create the overrun crackle/pop layer.
     void this.engineAudio.load().then(() => {
       this.engineFx = this.createEngineFx();
+      // Attach weather audio (rain + thunder) to the engine's AudioContext.
+      const wCtx = this.engineAudio.getContext();
+      const wMaster = this.engineAudio.getMaster();
+      if (wCtx && wMaster) this.weather.attachAudio(wCtx, wMaster);
       this.createWind();
     });
   }
@@ -425,6 +462,8 @@ export class Game {
       // Night atmosphere: sky follows the camera, moon shadows follow the car,
       // and the post pass tracks where the moon is on screen.
       this.atmosphere.update(dt, this.camera, cp);
+      this.weather.update(dt, cp);  // weather transitions, rain, lightning
+      setLightViewer(this.camera.position); // glare control: lamps of cars close to the camera dim
       this.atmospherePass.updateCamera(this.camera);
 
       // HUD speed (km/h) — only touch the DOM when the displayed value changes
@@ -486,7 +525,7 @@ export class Game {
       }
 
       this.composer.render();
-      this.perf.endFrame();
+      this.perf?.endFrame();
       this.stats.update();
     };
     loop();

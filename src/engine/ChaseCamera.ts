@@ -36,6 +36,7 @@ export class ChaseCamera {
   private wasAirborne = false; // last frame's airborne state, to detect touchdown
   private landingDip = 0;      // transient on landing: sinks the cam & flattens the look
   private chaseHeading = new THREE.Vector3(0, 0, 1); // smoothed forward direction
+  private wasLookBack = false; // track transition for instant snap in/out
 
   // Camera modes: [Close, Standard, Far, Above Chassis, Hood, FPP]
   private modes = [
@@ -122,11 +123,53 @@ export class ChaseCamera {
     this.chaseHeading.lerp(targetHeading, k(0.005)).normalize();
     const flatFwd = this._flatFwd.copy(this.chaseHeading);
 
-    // --- Look Pan: smoothly swing the camera around the car ---
+    // --- Look Back: instant rear view, fixed without turn effect ---
+    if (t.lookBack) {
+      const targetMode = this.modes[this.modeIndex];
+      const isInside = targetMode.distance < 2.0;
+      const dist = isInside ? 0 : targetMode.distance;
+      const height = targetMode.height;
+
+      // Rigidly locked to the car's current forward heading: NO turn lag, NO heading lerp
+      this.currentPos.copy(t.position).addScaledVector(targetHeading, dist);
+      this.currentPos.y += height;
+
+      // Look point is straight behind the car along its centerline: NO sideLook, NO turn lag
+      this.currentLook.copy(t.position).addScaledVector(targetHeading, -14);
+      this.currentLook.y += height * 0.8;
+
+      // Fixed: no roll, no pan lag
+      this.roll = 0;
+      this.panAngle = Math.PI;
+
+      this.camera.position.copy(this.currentPos);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(this.currentLook);
+
+      this.wasLookBack = true;
+      return;
+    }
+
+    // Transitioning back from lookBack to normal view: instant snap back
+    if (this.wasLookBack) {
+      this.wasLookBack = false;
+      this.panAngle = 0;
+      this.roll = 0;
+      this.chaseHeading.copy(targetHeading);
+      const targetMode = this.modes[this.modeIndex];
+      this.currentPos.copy(t.position).addScaledVector(targetHeading, -targetMode.distance);
+      this.currentPos.y += targetMode.height;
+      this.currentLook.copy(t.position).addScaledVector(targetHeading, 4);
+      this.camera.position.copy(this.currentPos);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(this.currentLook);
+      return;
+    }
+
+    // --- Look Pan: smoothly swing the camera around the car (lookLeft/lookRight) ---
     let targetPan = 0;
-    if (t.lookBack) targetPan = Math.PI;
-    else if (t.lookLeft && !t.lookRight) targetPan = Math.PI / 4;
-    else if (t.lookRight && !t.lookLeft) targetPan = -Math.PI / 4;
+    if (t.lookLeft && !t.lookRight) targetPan = -(70 * Math.PI / 180);  // Q → 70° left
+    else if (t.lookRight && !t.lookLeft) targetPan = (70 * Math.PI / 180);  // E → 70° right
     
     // Smoothly interpolate pan angle taking the shortest path around the circle
     const diff = Math.atan2(Math.sin(targetPan - this.panAngle), Math.cos(targetPan - this.panAngle));

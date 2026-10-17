@@ -113,7 +113,7 @@ const THEMES: Record<Theme, ThemeDef> = {
   },
 };
 
-const WIND_DIR = new THREE.Vector2(1, 0.35).normalize();
+export const WIND_DIR = new THREE.Vector2(1, 0.35).normalize();
 const WIND_SPEED = 7; // m/s, blowing sand
 
 export interface NightOptions {
@@ -137,6 +137,7 @@ export class NightAtmosphere {
     glintColor: { value: THREE.Color };
     glintGain: { value: number };
     rippleGain: { value: number };
+    wet: { value: number };          // 0 dry .. 1 soaked (darker sand, glossy puddles)
   };
 
   private readonly sky: THREE.Mesh;
@@ -150,11 +151,13 @@ export class NightAtmosphere {
     this.quality = opts.quality ?? "high";
     this.theme = opts.theme ?? "night";
     const T = THEMES[this.theme];
+    this.shadowDistance = this.theme === "night" ? 70 : 110;
     this.moonDir = T.keyDir.clone();
     this.groundUniforms = {
       glintColor: { value: T.glintColor.clone() },
       glintGain: { value: T.glintGain },
       rippleGain: { value: T.rippleGain },
+      wet: { value: 0 },
     };
     const high = this.quality === "high";
 
@@ -201,6 +204,16 @@ export class NightAtmosphere {
         uDiscGain: { value: T.discGain },
         uHaze: { value: T.haze },
         uDay: { value: this.theme === "night" ? 0 : 1 },
+        // weather (see Weather.ts): 3-colour gradient, horizon glow band, clouds, lightning
+        uMid: { value: new THREE.Color(0x000000) },
+        uMidAmt: { value: 0 },
+        uBand: { value: new THREE.Color(0xff9a45) },
+        uBandAmt: { value: 0 },
+        uCloud: { value: 0 },
+        uCloudCol: { value: new THREE.Color(0xffffff) },
+        uCloudDark: { value: new THREE.Color(0x808890) },
+        uCloudSpeed: { value: 1 },
+        uFlash: { value: 0 },
         uTime: this.timeU,
       },
       vertexShader: SKY_VERT,
@@ -267,7 +280,27 @@ export class NightAtmosphere {
 
   /** Distance of the shadow light from the car along the key direction. */
   private shadowDist() {
-    return this.theme === "night" ? 70 : 110;
+    return this.shadowDistance;
+  }
+
+  private shadowDistance: number;
+
+  /** Switch the shadow set-up between a dim night key light and a bright low sun. */
+  setShadowStyle(night: boolean) {
+    this.shadowDistance = night ? 70 : 110;
+    const sh = this.moonLight.shadow;
+    sh.camera.far = 240;
+    sh.camera.updateProjectionMatrix();
+    sh.bias = night ? -0.0004 : -0.0007;
+    sh.normalBias = night ? 0 : 0.55;
+  }
+
+  /** Night grains glow (additive); day dust is a tan veil (normal blending). */
+  setSandStyle(additive: boolean) {
+    const b = additive ? THREE.AdditiveBlending : THREE.NormalBlending;
+    if (this.sandMat.blending === b) return;
+    this.sandMat.blending = b;
+    this.sandMat.needsUpdate = true;
   }
 
   /**
@@ -280,12 +313,14 @@ export class NightAtmosphere {
     const glintColorU = this.groundUniforms.glintColor;
     const glintGainU = this.groundUniforms.glintGain;
     const rippleGainU = this.groundUniforms.rippleGain;
+    const wetU = this.groundUniforms.wet;
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = timeU;
       shader.uniforms.uWindDir = windDirU;
       shader.uniforms.uGlintColor = glintColorU;
       shader.uniforms.uGlintGain = glintGainU;
       shader.uniforms.uRippleGain = rippleGainU;
+      shader.uniforms.uWet = wetU;
       shader.vertexShader = shader.vertexShader
         .replace("#include <common>", "#include <common>\nvarying vec3 vWindWorld;")
         .replace(
@@ -294,9 +329,11 @@ export class NightAtmosphere {
         );
       shader.fragmentShader = shader.fragmentShader
         .replace("#include <common>", `#include <common>\n${GROUND_WIND_HEAD}`)
-        .replace("#include <color_fragment>", `#include <color_fragment>\n${GROUND_WIND_BODY}`);
+        .replace("#include <color_fragment>", `#include <color_fragment>\n${GROUND_WIND_BODY}`)
+        // wet sand is glossy: puddles reflect the key light
+        .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.08, gWet);");
     };
-    material.customProgramCacheKey = () => `ground-wind-v2-${this.theme}`;
+    material.customProgramCacheKey = () => `ground-wind-v3-${this.theme}`;
     material.needsUpdate = true;
   }
 
@@ -345,6 +382,15 @@ const SKY_FRAG = /* glsl */ `
   uniform float uHaze;
   uniform float uDay;
   uniform float uTime;
+  uniform vec3 uMid;
+  uniform float uMidAmt;
+  uniform vec3 uBand;
+  uniform float uBandAmt;
+  uniform float uCloud;
+  uniform vec3 uCloudCol;
+  uniform vec3 uCloudDark;
+  uniform float uCloudSpeed;
+  uniform float uFlash;
   varying vec3 vDir;
 
   float hash13(vec3 p) {
@@ -372,6 +418,16 @@ const SKY_FRAG = /* glsl */ `
     // By day the horizon stays warm much higher up (a thick band of suspended dust).
     float t = pow(clamp(h, 0.0, 1.0), mix(0.5, 0.72, uDay));
     vec3 col = mix(uHorizon, uZenith, t);
+    if (uMidAmt > 0.001) {
+      // three-colour sky: horizon -> mid -> zenith (dawn / sunset gradients)
+      vec3 m3 = t < 0.5 ? mix(uHorizon, uMid, t * 2.0) : mix(uMid, uZenith, (t - 0.5) * 2.0);
+      col = mix(col, m3, uMidAmt);
+    }
+    if (uBandAmt > 0.001) {
+      // warm glow hugging the horizon, strongest towards the sun
+      float az = max(dot(normalize(d.xz + 1e-5), normalize(uMoonDir.xz + 1e-5)), 0.0);
+      col += uBand * uBandAmt * (pow(az, 3.0) * 0.9 + 0.15) * exp(-max(h, 0.0) * 6.0) * smoothstep(-0.05, 0.02, h);
+    }
 
     // Stars (hash grid on the sphere), twinkling, only well above the horizon.
     if (uStars > 0.001) {
@@ -409,6 +465,27 @@ const SKY_FRAG = /* glsl */ `
     col = mix(col, uMoonTint * uDiscGain * maria, disc);
 
     // Hide the key light below the horizon: fade to the fog colour.
+    if (uCloud > 0.001 && h > 0.0) {
+      // cloud deck: fbm noise on a flat plane projected from the view direction
+      vec2 cuv = d.xz / (h * 0.85 + 0.14) * 0.55 + vec2(uTime * 0.012, uTime * 0.004) * uCloudSpeed;
+      float f = 0.0;
+      float amp = 0.5;
+      for (int i = 0; i < 4; i++) {
+        f += amp * vnoise(vec3(cuv, 3.7));
+        cuv = cuv * 2.03 + vec2(17.1, 9.2);
+        amp *= 0.5;
+      }
+      float th = 0.78 - 0.6 * uCloud;
+      float dens = smoothstep(th, th + 0.22, f);
+      float fade = smoothstep(0.0, 0.16, h);
+      float sunAmt = pow(max(dot(d, uMoonDir), 0.0), 3.0);
+      vec3 cc = mix(uCloudDark, uCloudCol, 0.3 + 0.7 * (1.0 - dens * 0.6));
+      cc += uMoonTint * sunAmt * (1.0 - dens * 0.5) * 0.7;
+      cc += vec3(0.75, 0.8, 1.0) * uFlash * (0.5 + dens);
+      col = mix(col, cc, dens * fade * 0.94);
+    }
+    col += vec3(0.6, 0.65, 0.9) * uFlash * 0.3;
+
     col = mix(uHorizon, col, smoothstep(-0.02, 0.01, h));
 
     // Tiny noise against banding in the gradient.
@@ -470,6 +547,8 @@ const GROUND_WIND_HEAD = /* glsl */ `
   uniform vec3 uGlintColor;
   uniform float uGlintGain;
   uniform float uRippleGain;
+  uniform float uWet;
+  float gWet = 0.0;
   varying vec3 vWindWorld;
   float windHash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -498,6 +577,11 @@ const GROUND_WIND_BODY = /* glsl */ `
     // Rare soft glints (moonlit at night, sun-glittering grains by day).
     float h = windHash(floor(wp * 1.8));
     float glint = step(0.9965, h) * (0.5 + 0.5 * sin(uTime * 2.0 + h * 60.0));
-    diffuseColor.rgb += uGlintColor * glint * uGlintGain * near;
+    diffuseColor.rgb += uGlintColor * glint * uGlintGain * near * (1.0 - uWet);
+
+    // rain: darker sand overall, broad glossy puddles
+    float pm = 0.5 + 0.5 * sin(wp.x * 0.045 + sin(wp.y * 0.031) * 2.5) * sin(wp.y * 0.052 + sin(wp.x * 0.027) * 2.0);
+    gWet = uWet * (0.5 + 0.5 * smoothstep(0.3, 0.8, pm));
+    diffuseColor.rgb *= 1.0 - 0.4 * gWet;
   }
 `;

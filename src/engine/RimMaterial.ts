@@ -7,6 +7,15 @@ import * as THREE from "three";
  * angles. We drive it from the view-space normal so it works with Three's
  * standard lighting and post-processing (bloom picks up the rim nicely).
  */
+/**
+ * Shared by EVERY rim material (cars, ramps, cones): the weather system scales and tints the rim
+ * so it never glows in the dark. mul = 0 switches the rim off, 1 = the material's own strength.
+ */
+export const rimGlobal = {
+  mul: { value: 1 },
+  tint: { value: new THREE.Color(1, 1, 1) },
+};
+
 export interface RimOptions {
   color?: THREE.ColorRepresentation;
   metalness?: number;
@@ -31,6 +40,8 @@ export function createRimMaterial(opts: RimOptions = {}): THREE.MeshStandardMate
     shader.uniforms.uRimColor = { value: rimColor };
     shader.uniforms.uRimStrength = { value: rimStrength };
     shader.uniforms.uRimPower = { value: rimPower };
+    shader.uniforms.uRimMul = rimGlobal.mul;
+    shader.uniforms.uRimTint = rimGlobal.tint;
 
     // Pass the view-space normal & position through to the fragment shader.
     shader.vertexShader = shader.vertexShader
@@ -54,6 +65,8 @@ export function createRimMaterial(opts: RimOptions = {}): THREE.MeshStandardMate
          uniform vec3 uRimColor;
          uniform float uRimStrength;
          uniform float uRimPower;
+         uniform float uRimMul;
+         uniform vec3 uRimTint;
          varying vec3 vRimViewNormal;
          varying vec3 vRimViewPos;`
       )
@@ -63,7 +76,7 @@ export function createRimMaterial(opts: RimOptions = {}): THREE.MeshStandardMate
          vec3 viewDir = normalize(-vRimViewPos);
          float rim = 1.0 - max(dot(viewDir, normalize(vRimViewNormal)), 0.0);
          rim = pow(clamp(rim, 0.0, 1.0), uRimPower);
-         gl_FragColor.rgb = mix(gl_FragColor.rgb, uRimColor, rim * uRimStrength);`
+         gl_FragColor.rgb = mix(gl_FragColor.rgb, uRimColor * uRimTint, rim * uRimStrength * uRimMul);`
       );
   };
 

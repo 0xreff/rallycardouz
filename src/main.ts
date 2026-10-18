@@ -20,7 +20,7 @@ async function preloadAssets(): Promise<void> {
   // --- 1. GLB models ---
   const models = ["toyota.glb", "toyota6.glb", "toyota-24.glb"];
   const modelFetches = models.map((m) =>
-    fetch(`${base}assets/${m}`).catch(() => {})
+    fetch(`${base}assets/${m}`).catch(() => { })
   );
 
   // --- 2. Audio manifests + all audio files from every engine sound set ---
@@ -28,8 +28,8 @@ async function preloadAssets(): Promise<void> {
   const engineSets = ["toyota", "toyota6"]; // all engine sound folders
 
   // Fetch the root manifest and per-set manifests
-  const manifestFetches: Promise<void>[] = [
-    fetch(`${audioBase}manifest.json`).catch(() => {}),
+  const manifestFetches: Promise<unknown>[] = [
+    fetch(`${audioBase}manifest.json`).catch(() => { }),
   ];
 
   for (const set of engineSets) {
@@ -58,10 +58,10 @@ async function preloadAssets(): Promise<void> {
           }
           // Fetch all audio files in parallel (warm the cache)
           await Promise.all(
-            audioFiles.map((f) => fetch(`${setBase}${f}`).catch(() => {}))
+            audioFiles.map((f) => fetch(`${setBase}${f}`).catch(() => { }))
           );
         })
-        .catch(() => {})
+        .catch(() => { })
     );
   }
 
@@ -85,10 +85,10 @@ async function preloadAssets(): Promise<void> {
           }
         }
         await Promise.all(
-          audioFiles.map((f) => fetch(`${audioBase}${f}`).catch(() => {}))
+          audioFiles.map((f) => fetch(`${audioBase}${f}`).catch(() => { }))
         );
       })
-      .catch(() => {})
+      .catch(() => { })
   );
 
   await Promise.all([...modelFetches, ...manifestFetches]);
@@ -117,4 +117,4 @@ async function boot() {
   }
 }
 
-boot();
+boot();

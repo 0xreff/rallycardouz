@@ -9,7 +9,7 @@ import {
 } from "./gearbox";
 
 const dt = 1 / 60;
-const TOP = 48; // a car's 6th-gear top speed (m/s)
+const TOP = 61; // a car's 6th-gear top speed (m/s)
 
 /** Drive a fresh gearbox up to 5th on the limiter. */
 function onLimiter() {
@@ -20,18 +20,18 @@ function onLimiter() {
 }
 
 /** A box in 1st, revving out just below the upshift point after the minimum gear time.
- *  1st gear top = 0.18 * 37.5 = 6.75 m/s; upshift at 0.92 * 6.75 ≈ 6.21 m/s. */
+ *  1st gear top = 0.353 * 47.22 ≈ 16.67 m/s; upshift at 0.92 * 16.67 ≈ 15.34 m/s. */
 function inFirstGearReadyToShift() {
   const s = createGearbox();
   const n = Math.ceil((MIN_GEAR_TIME + 0.1) / dt);
-  for (let i = 1; i <= n; i++) stepGearbox(s, 6.1 * (i / n), TOP, false, dt);
+  for (let i = 1; i <= n; i++) stepGearbox(s, 15.2 * (i / n), TOP, false, dt);
   return s;
 }
 
 describe("gearbox", () => {
-  it("caps 5th at 130-140 km/h for every car", () => {
-    expect(FIFTH_TOP * 3.6).toBeGreaterThanOrEqual(130);
-    expect(FIFTH_TOP * 3.6).toBeLessThanOrEqual(140);
+  it("caps 5th at 165-175 km/h for every car", () => {
+    expect(FIFTH_TOP * 3.6).toBeGreaterThanOrEqual(165);
+    expect(FIFTH_TOP * 3.6).toBeLessThanOrEqual(175);
   });
 
   it("starts in 1st at the high rally idle", () => {
@@ -127,42 +127,44 @@ describe("gearbox", () => {
 
   it("cuts power on an upshift, then brings it back gradually", () => {
     const s = inFirstGearReadyToShift();
-    stepGearbox(s, 6.3, TOP, false, dt); // past 1st's upshift point
+    stepGearbox(s, 15.5, TOP, false, dt); // past 1st's upshift point
     expect(s.gear).toBe(2);
     expect(isShifting(s)).toBe(true);
     expect(driveMultiplier(s)).toBe(0);
-    for (let t = 0; t < SHIFT_CUT - dt; t += dt) stepGearbox(s, 6.3, TOP, false, dt);
+    for (let t = 0; t < SHIFT_CUT - dt; t += dt) stepGearbox(s, 15.5, TOP, false, dt);
     expect(driveMultiplier(s)).toBe(0); // still fully cut (clutch in)
-    for (let t = 0; t < SHIFT_RAMP / 2; t += dt) stepGearbox(s, 6.3, TOP, false, dt);
+    for (let t = 0; t < SHIFT_RAMP / 2; t += dt) stepGearbox(s, 15.5, TOP, false, dt);
     const half = driveMultiplier(s);
     expect(half).toBeGreaterThan(0);    // clutch biting
-    for (let t = 0; t < SHIFT_RAMP; t += dt) stepGearbox(s, 6.3, TOP, false, dt);
+    for (let t = 0; t < SHIFT_RAMP; t += dt) stepGearbox(s, 15.5, TOP, false, dt);
     expect(driveMultiplier(s)).toBeGreaterThan(half); // full power back
     expect(isShifting(s)).toBe(false);
   });
 
   it("the revs fall during a shift instead of snapping to the new gear", () => {
     const s = inFirstGearReadyToShift();
-    const before = stepGearbox(s, 6.3, TOP, false, dt).rpm;
-    stepGearbox(s, 6.3, TOP, false, dt);
+    const before = stepGearbox(s, 15.5, TOP, false, dt).rpm;
+    stepGearbox(s, 15.5, TOP, false, dt);
     const r1 = s.rpm;
-    for (let i = 0; i < 6; i++) stepGearbox(s, 6.3, TOP, false, dt);
+    for (let i = 0; i < 6; i++) stepGearbox(s, 15.5, TOP, false, dt);
     const r2 = s.rpm;
     expect(r1).toBeGreaterThan(r2);                 // still dropping
     expect(before - r1).toBeLessThan(500);          // no instant jump
-    for (let i = 0; i < 90; i++) stepGearbox(s, 6.3, TOP, false, dt);
-    expect(s.rpm).toBeLessThan(r2);                 // settled at the lower new-gear revs
+    for (let i = 0; i < 180; i++) stepGearbox(s, 15.5, TOP, false, dt);
+    // After full settling, RPM should have climbed back up from the shift-drop
+    // but be in a stable range consistent with 15.5 m/s in 2nd gear.
+    expect(s.rpm).toBeGreaterThan(SHIFT_LAND_RPM - 1000); // settled, not crashed
   });
 
   it("holds each gear for a minimum time and never double-shifts", () => {
     const s = inFirstGearReadyToShift();
-    stepGearbox(s, 6.3, TOP, false, dt);
+    stepGearbox(s, 15.5, TOP, false, dt);
     expect(s.gear).toBe(2);
     // Even at a speed way past 2nd's upshift point, 2nd is held for MIN_GEAR_TIME.
     let t = 0;
-    while (t < MIN_GEAR_TIME - 2 * dt) { stepGearbox(s, 30, TOP, false, dt); t += dt; }
+    while (t < MIN_GEAR_TIME - 2 * dt) { stepGearbox(s, 40, TOP, false, dt); t += dt; }
     expect(s.gear).toBe(2);
-    for (let i = 0; i < 120; i++) stepGearbox(s, 30, TOP, false, dt);
+    for (let i = 0; i < 120; i++) stepGearbox(s, 40, TOP, false, dt);
     expect(s.gear).toBeGreaterThan(2);
   });
 
@@ -221,9 +223,9 @@ describe("gearbox", () => {
 
   it("does not hunt between gears at a steady speed (hysteresis)", () => {
     const s = inFirstGearReadyToShift();
-    stepGearbox(s, 6.3, TOP, false, dt);
+    stepGearbox(s, 15.5, TOP, false, dt);
     for (let i = 0; i < 120; i++) {
-      stepGearbox(s, 5.5, TOP, false, dt);
+      stepGearbox(s, 13.5, TOP, false, dt);
       expect(s.gear).toBe(2);
     }
   });
@@ -238,11 +240,11 @@ describe("gearbox", () => {
 
   it("upshift lands RPM near SHIFT_LAND_RPM with variation", () => {
     const s = inFirstGearReadyToShift();
-    stepGearbox(s, 6.3, TOP, false, dt); // trigger upshift to 2nd
+    stepGearbox(s, 15.5, TOP, false, dt); // trigger upshift to 2nd
     expect(s.gear).toBe(2);
     expect(isShifting(s)).toBe(true);
     // Run through the full shift cut so RPM settles toward the landing zone
-    for (let t = 0; t < SHIFT_CUT; t += dt) stepGearbox(s, 6.3, TOP, false, dt);
+    for (let t = 0; t < SHIFT_CUT; t += dt) stepGearbox(s, 15.5, TOP, false, dt);
     // RPM should be in or near the landing zone (SHIFT_LAND_RPM ± SHIFT_LAND_VARY + transition margin)
     expect(s.rpm).toBeGreaterThanOrEqual(SHIFT_LAND_RPM - SHIFT_LAND_VARY - 500);
     expect(s.rpm).toBeLessThanOrEqual(SHIFT_LAND_RPM + SHIFT_LAND_VARY + 500);

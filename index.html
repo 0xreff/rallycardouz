@@ -8,6 +8,10 @@
   <link rel="preload" href="./assets/toyota.glb" as="fetch" crossorigin />
   <link rel="preload" href="./assets/toyota6.glb" as="fetch" crossorigin />
   <link rel="preload" href="./assets/toyota-24.glb" as="fetch" crossorigin />
+  <!-- Preload audio manifests so engine sounds are ready immediately -->
+  <link rel="preload" href="./assets/audio/engine/manifest.json" as="fetch" crossorigin />
+  <link rel="preload" href="./assets/audio/engine/toyota/manifest.json" as="fetch" crossorigin />
+  <link rel="preload" href="./assets/audio/engine/toyota6/manifest.json" as="fetch" crossorigin />
   <style>
     :root {
       color-scheme: dark;
@@ -505,7 +509,7 @@
       <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer &nbsp; <kbd>Space</kbd> handbrake (slide turns)<br />
       <kbd>F</kbd> flip upright &nbsp; <kbd>R</kbd> reset to start &nbsp; <kbd>C</kbd> change car &nbsp; <kbd>V</kbd>
       change view<br />
-      <kbd>T</kbd> hold on the 135 km/h limiter to unlock 6th gear
+      <kbd>T</kbd> hold on the 170 km/h limiter to unlock 6th gear
     </div>
   </div>
   <div id="loader">

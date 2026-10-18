@@ -15,7 +15,7 @@
 export interface CarSpec {
   name: string;
   color: number;
-
+  powerSlideAngle?: number;
   // Geometry / silhouette (metres, half-extents of the collider box = the body).
   halfWidth: number;
   halfHeight: number;
@@ -65,6 +65,13 @@ export interface CarSpec {
   hbFrontGrip: number;      // 0..1 front side grip right after release while the rear is unhooked (balances the axles: slide, don't spin)
   counterSteer: number;     // 0..1+ assist gain: front wheels point toward the direction of travel in a slide
   counterSteerMax: number;  // rad: most the counter-steer assist may add to the front wheel angle
+
+  // Corner feel (all optional, 0/unset = off).
+  yawAssist?: number;       // 1/s: how hard the body is pulled toward the yaw rate the front wheels ask for (rotation help)
+  yawAssistMax?: number;    // rad/s²: cap on that pull, so it can never snap the car round
+  yawAssistLat?: number;    // m/s²: lateral acceleration the rotation help may ask for (caps the target yaw rate at speed)
+  cornerCarry?: number;     // 0..~0.3: gives back forward speed in corners under throttle (cancels tyre scrub)
+  tailKick?: number;        // 0..1: rear grip given up when the steering moves fast (flick: the tail swings round, then bites)
 
   // Cosmetic body lean (visual only).
   leanStrength: number;
@@ -159,20 +166,21 @@ const TOYOTA: CarInput = {
   color: 0xdddddd,
   halfWidth: 0.93, halfHeight: 0.5, halfLength: 2.45, // ~1.86 x 1.0 x 4.9 m body
   wheelRadius: 0.4, wheelWidth: 0.28,
-  mass: 1900,
+  mass: 2000,
   comOffset: { x: 0, y: -0.35, z: 0.1 },
   inertiaScale: { x: 1, y: 0.65, z: 1.5 },
   linearDamping: 0.1, angularDamping: 0.35,
   engineAccel: 17, reverseAccel: 7, maxBrake: 24, handbrake: 4.5,
   driveBias: { front: 0, back: 1 }, // RWD: all drive through the rear axle
-  topSpeed: 48, launchSpeed: 14, launchBoost: 0.8,
-  overspeed: 0.25, overspeedAccel: 1.2,
-  maxSteer: 0.68, steerRate: 10, turnSlowdown: 0.02, engineRate: 16,
-  steerSlew: 3.0, steerYawLow: 1.12, steerYawHigh: 1.36,
-  slipThreshold: 2.5, slipAngle: 0.200, kineticGripRatio: 0.50,
-  rearGripBias: 1.00, liftoffOversteer: 0.38, tailSlip: 0.20,
-  powerOversteer: 0.46, handbrakeGrip: 0.23,
+  topSpeed: 58, launchSpeed: 14, launchBoost: 0.8,
+  overspeed: 0.27, overspeedAccel: 1.7, powerSlideAngle: 0.45,
+  maxSteer: 0.68, steerRate: 8, turnSlowdown: 0.02, engineRate: 16,
+  steerSlew: 4.0, steerYawLow: 1.30, steerYawHigh: 1.45,
+  slipThreshold: 3.2, slipAngle: 0.200, kineticGripRatio: 0.80,
+  rearGripBias: 1.00, liftoffOversteer: 0.38, tailSlip: 0.30,
+  powerOversteer: 0.8, handbrakeGrip: 0.23,
   hbRecoverTime: 1.30, hbHookup: 0.56, hbFrontGrip: 0.30, counterSteer: 0.25, counterSteerMax: 0.10,
+  yawAssist: 8, yawAssistMax: 12, yawAssistLat: 70, cornerCarry: 1.2, tailKick: 0.1,
   leanStrength: 0.04, leanLowSpeedAmp: 1.8,
   brakeBiasFront: 0.65, weightTransfer: 0.25, accelTransfer: 0.15, brakeRamp: 20, lockupAt: 0.97, lockupGrip: 0.35,
   ...RALLY_SUSPENSION,
@@ -190,15 +198,14 @@ const TOYOTA: CarInput = {
  */
 export const CARS: Record<string, CarSpec> = {
 
-  // toyota.glb is auto-fitted to the physics wheels like the other two (its spare wheel is
-  // ignored). Keeps the Blender tyre size: radius / track measured from the model at this fit.
-  toyota: makeCar({ ...TOYOTA, keepModelWheelSize: true, wheelRadius: 0.448, wheelXOffset: -0.023, engineSound: "toyota" }),
-
+  // Keeps the Blender tyre size (model tyres ~0.47 m radius at this fit); physics matches.
+  toyota: makeCar({ ...TOYOTA, keepModelWheelSize: true, wheelRadius: 0.443, wheelXOffset: 0, engineSound: "toyota" }),
   // Same driving as the Toyota, different model. The model is auto-fitted to these
   // physics wheels, so only touch visualYOffset/visualZOffset for small nudges.
   toyota6: makeCar({
     ...TOYOTA,
     name: "Toyota6",
+    mass: 2400,
     modelFile: "toyota6.glb",
     keepModelWheelSize: true, wheelRadius: 0.454, wheelXOffset: 0.037,
     engineSound: "toyota6",
@@ -213,33 +220,8 @@ export const CARS: Record<string, CarSpec> = {
     ...TOYOTA,
     name: "Toyota24",
     modelFile: "toyota-24.glb",
-    keepModelWheelSize: true, wheelRadius: 0.420, wheelXOffset: -0.078,
-    engineSound: "toyota", // reuses the Toyota engine loops (no toyota-24 recording yet)
-
-    // ---- Toyota24 "easy and powerful" tune (overrides the shared TOYOTA numbers) ----
-    // POWER: ~40% more pull, higher top speed, harder launch, quicker throttle response.
-    engineAccel: 24, topSpeed: 56, launchSpeed: 16, launchBoost: 1.0,
-    overspeedAccel: 1.8, engineRate: 20, maxBrake: 28,
-    // AWD (40% front): the front axle helps pull, so power no longer throws the tail out.
-    driveBias: { front: 0.4, back: 1 },
-    // CHANGING DIRECTION: more lock, faster wheel, more yaw authority (esp. at speed),
-    // and a lower yaw inertia so the nose swings round readily.
-    maxSteer: 0.75, steerRate: 14, steerSlew: 4.2,
-    steerYawLow: 1.3, steerYawHigh: 1.6,
-    inertiaScale: { x: 1, y: 0.55, z: 1.5 },
-    // SPEED STABILITY: more tyre grip, breaks loose later, keeps more grip when it does,
-    // tail doesn't step out on lift-off / power / cornering, calmer rotation, lower COM, firmer springs.
-    frictionSlip: 2.1, sideFrictionStiffness: 2.2,
-    slipThreshold: 3.2, slipAngle: 0.24, kineticGripRatio: 0.66,
-    tailSlip: 0.08, liftoffOversteer: 0.15, powerOversteer: 0.20,
-    angularDamping: 0.5, comOffset: { x: 0, y: -0.42, z: 0.1 }, leanStrength: 0.03,
-    suspensionStiffness: 42, suspensionCompression: 3.0, suspensionRelaxation: 4.6,
-    // HANDBRAKE STABILITY: rear keeps more side grip (controlled slide, not a spin), the front
-    // stays biting so the axles balance, the rear hooks back up fast, and counter-steer
-    // assist catches the slide for you.
-    handbrake: 5.5, handbrakeGrip: 0.32,
-    hbRecoverTime: 0.8, hbHookup: 0.75, hbFrontGrip: 0.5,
-    counterSteer: 0.6, counterSteerMax: 0.28,
+    keepModelWheelSize: true, wheelRadius: 0.461, wheelXOffset: -0.064,
+    engineSound: "toyota6", // reuses the Toyota engine loops (no toyota-24 recording yet)
   }),
 };
 

@@ -12,7 +12,7 @@ import { clamp } from "./handling";
  *    slipping, then the clutch drops and the car gets a short kick (wheelspin).
  *    Once a launch has started it is LATCHED: creeping or rolling at up to
  *    LAUNCH_ABORT_SPEED does not cancel it (only letting off the throttle does).
- *  - 5th gear tops out at FIFTH_TOP (135 km/h) for every car: the rev limiter.
+ *  - 5th gear tops out at FIFTH_TOP (170 km/h) for every car: the rev limiter.
  *  - 6th is LOCKED. Holding T on the 5th-gear limiter engages it with a gentle,
  *    long-lasting push (BOOST_TIME) and opens the car's own full top speed. It stays
  *    engaged until the car drops well below the pace (SIXTH_RELOCK), then re-locks.
@@ -27,10 +27,14 @@ import { clamp } from "./handling";
  */
 
 export const GEAR_COUNT = 6;
-/** 5th-gear top speed (m/s) shared by all cars: 37.5 m/s = 135 km/h. */
-export const FIFTH_TOP = 37.5;
-/** Gears 1-5 top speed as a fraction of FIFTH_TOP. Wider gaps = bigger RPM drops on shift. */
-const GEAR_FRACTIONS = [0.18, 0.38, 0.58, 0.78, 1.0];
+/** 5th-gear top speed (m/s) shared by all cars: 47.22 m/s ≈ 170 km/h. */
+export const FIFTH_TOP = 47.22;
+/**
+ * Gears 1-5 top speed as a fraction of FIFTH_TOP.
+ * 1st: 0-60 km/h, 2nd: 45-79 km/h, 3rd: 70-120 km/h, 4th: 90-140 km/h, 5th: 130-170 km/h
+ * 6th unlocks up to the car's own topSpeed (160-220 km/h range).
+ */
+const GEAR_FRACTIONS = [0.353, 0.465, 0.706, 0.823, 1.0];
 /**
  * Per-gear leverage on the engine force. Punchier across the board so the car
  * accelerates hard through each gear. 6th keeps its push.

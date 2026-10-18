@@ -71,7 +71,7 @@ const BASE_NIGHT: Look = {
     rippleGain: 1, glintGain: 0.25, glintColor: V(0.5, 0.45, 0.9), wet: 0,
     sandColor: V(0.7, 0.62, 1.0), sandAlpha: 0.2, sandSpeed: 7, sandSize: 28, sandMaxPx: 6, sandAdditive: true,
     rain: 0, lightning: 0, windPreset: "desert", skidAmbient: 0.6,
-    rim: 1, rimTint: V(1, 1, 1),
+    rim: 0.55, rimTint: V(1, 1, 1), // violet moon edge glow on the cars (was 1: too bright)
 };
 
 const BASE_DAY: Look = {

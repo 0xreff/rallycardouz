@@ -13,24 +13,26 @@ import {
   nextImpact, creepTopEndCap, speedFraction as computeSpeedFraction, shouldHoldHandbrake,
   powerOversteer, airAttitudeRate, tiltAssist,
   steerLockLimit, steerSlew, slideRamp, counterSteerAssist, nextHookup,
+  wheelYawRate, yawAssistDelta, cornerCarryDelta,
 } from "./handling";
 import { createGearbox, stepGearbox, driveMultiplier, speedCap, sixthReady, type GearboxState } from "./gearbox";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CarSpec } from "./CarSpec";
 
 
-// Wheel nodes inside a .glb. The spare wheel (Wheel_sc / Wheel_secour / spare) and the brake
-// parts must NOT count: with a spare the model reports 5 wheels, the fit gives up and the real
-// wheels never bind (the placeholder cylinders stay visible instead).
-const WHEEL_RE = /wheel|tyre|tire/i;
-const NOT_WHEEL_RE = /brake|caliper|rotor|_sc$|secour|spare/i;
-
 /** Convert a GLB material to RimMaterial while preserving the per-part PBR look. */
+// How shiny the car bodies may get. Blender's glossy/metallic values throw hard glare from the
+// moon and sun: metalness is capped and roughness floored (glass is left alone).
+// Lower CAR_MAX_METALNESS / raise CAR_MIN_ROUGHNESS to calm the reflections further.
+const CAR_MAX_METALNESS = 0.30;
+const CAR_MIN_ROUGHNESS = 0.60;
+
 function convertGlbMaterial(old: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
+  const glass = old.transparent || old.opacity < 1;
   const n = createRimMaterial({
     color: old.color,
-    metalness: old.metalness,
-    roughness: old.roughness,
+    metalness: glass ? old.metalness : Math.min(old.metalness, CAR_MAX_METALNESS),
+    roughness: glass ? old.roughness : Math.max(old.roughness, CAR_MIN_ROUGHNESS),
   });
   n.map = old.map;
   n.normalMap = old.normalMap;
@@ -214,6 +216,10 @@ export class Car {
   private _recoverQ = new THREE.Quaternion();
   private _recoverEuler = new THREE.Euler();
   // Reusable POJO for Rapier setLinvel / setAngvel (avoids { x, y, z } literals per frame)
+  private prevSteerIn = 0;
+  private powerSpinAmt = 0;
+  private prevHSpeed = 0;
+  private tailKickAmt = 0;
   private _rv3 = { x: 0, y: 0, z: 0 };
   // ---- Physics interpolation: previous state for smooth rendering ----
   private _prevPos = new THREE.Vector3();
@@ -309,24 +315,29 @@ export class Car {
 
     const wheelGeo = new THREE.CylinderGeometry(spec.wheelRadius, spec.wheelRadius, spec.wheelWidth, 18);
     wheelGeo.rotateZ(Math.PI / 2); // align cylinder axis to local X (the axle)
-    // Placeholder tyres: only visible when a model's own wheels can't be bound.
-    const wheelMat = createRimMaterial({ color: 0x14151a, metalness: 0.1, roughness: 0.8, rimStrength: 0.18 });
+    const useDebug = spec.name === "Tank" || spec.name === "Toyota";
+    const wheelMat = useDebug
+      ? new THREE.MeshBasicMaterial({ color: 0xff00aa, wireframe: true, transparent: true, opacity: 0.4 })
+      : createRimMaterial({ color: 0x14151a, metalness: 0.1, roughness: 0.8, rimStrength: 0.18 });
 
     for (let i = 0; i < 4; i++) {
       const m = new THREE.Mesh(wheelGeo, wheelMat);
-      m.castShadow = true;
+      m.castShadow = !useDebug;
       scene.add(m);
       this.wheelMeshes.push(m);
     }
   }
 
   private buildChassis(spec: CarSpec): THREE.Object3D {
-    if (spec.modelFile || spec.name === "Toyota") {
+    if (spec.modelFile || spec.name === "Tank" || spec.name === "Toyota" || spec.name === "Ram") {
       const root = new THREE.Group();
       const loader = new GLTFLoader();
 
       const assetBase = `${import.meta.env.BASE_URL}assets/`;
-      const glbPath = `${assetBase}${spec.modelFile ?? "toyota.glb"}`;
+      let glbPath = `${assetBase}d01c4c8e1685f8a60e41844cdde58a22.glb`;
+      if (spec.modelFile) glbPath = `${assetBase}${spec.modelFile}`;
+      else if (spec.name === "Toyota") glbPath = `${assetBase}toyota.glb`;
+      else if (spec.name === "Ram") glbPath = `${assetBase}ram.glb`;
 
       loader.load(glbPath, (gltf) => {
         const model = gltf.scene;
@@ -418,7 +429,8 @@ export class Car {
    */
   private bindModelWheels(root: THREE.Object3D, model: THREE.Object3D) {
     const brakeRe = /brake|caliper|rotor/i;
-    const wheels = this.findNodes(model, WHEEL_RE, NOT_WHEEL_RE);
+    // Spare wheels (e.g. "Wheel_sc" on the tailgate) are not road wheels: skip names ending _sc / containing spare.
+    const wheels = this.findNodes(model, /wheel|tyre|tire/i, /brake|caliper|rotor|spare|_sc$/i);
     const brakes = this.findNodes(model, brakeRe);
     if (wheels.length !== 4) {
       // Not an error: models with the wheels baked into the body keep the cylinders.
@@ -524,7 +536,7 @@ export class Car {
    * Returns false when 4 wheel nodes aren't found (caller uses the bounding-box fit).
    */
   private fitModelToPhysics(root: THREE.Object3D, model: THREE.Object3D, spec: CarSpec): boolean {
-    const wheels = this.findNodes(model, WHEEL_RE, NOT_WHEEL_RE);
+    const wheels = this.findNodes(model, /wheel|tyre|tire/i, /brake|caliper|rotor|spare|_sc$/i);
     if (wheels.length !== 4) return false;
 
     // Measure in the car's own frame: park the root at the origin. syncMeshes()
@@ -712,6 +724,13 @@ export class Car {
       : counterSteerAssist(leftSlip, speed, spec.counterSteer, spec.counterSteerMax, spec.slipAngle, Math.abs(controls.steer));
     const steerTarget = THREE.MathUtils.clamp(-controls.steer * lockLimit + assist, -spec.maxSteer, spec.maxSteer);
     this.steer = steerSlew(this.steer, steerTarget, spec.steerRate, spec.steerSlew, dt);
+    // Tail kick: moving the steering FAST (a flick, a direction change) unsettles the rear
+    // for a moment so the tail swings round, then it bites again as the input settles.
+    const steerRateIn = Math.abs(controls.steer - this.prevSteerIn) / Math.max(dt, 1e-4);
+    this.prevSteerIn = controls.steer;
+    const kickIn = (spec.tailKick ?? 0) * THREE.MathUtils.clamp(steerRateIn / 5, 0, 1) *
+      THREE.MathUtils.clamp(Math.abs(speed) / 8, 0, 1);
+    this.tailKickAmt = Math.max(kickIn, this.tailKickAmt * Math.exp(-dt / 0.25));
     for (const i of FRONT) this.controller.setWheelSteering(i, this.steer);
 
     // Lift-off oversteer (grip): releasing the throttle mid-corner loosens the
@@ -854,13 +873,23 @@ export class Car {
     // up side grip: the tail steps out and the throttle steers the car (more on dirt).
     const rearDriveShare = spec.driveBias.back / Math.max(1e-6, spec.driveBias.front + spec.driveBias.back);
     const rearSurfGrip = (this.wheelSurface[2].grip + this.wheelSurface[3].grip) * 0.5;
-    backSide *= 1 - powerOversteer(
+    // Self-limiting power slide: the throttle lets the tail step out, but as the body slips
+    // past `powerSlideAngle` the rear bites again (the strong motor then drives the car out
+    // along its new heading), so the slide is short and the car turns to position.
+    const powerLoose = powerOversteer(
       spec.powerOversteer, controls.throttle, Math.abs(controls.steer), speed, rearDriveShare, rearSurfGrip
     );
+    const psA = spec.powerSlideAngle ?? 0;
+    const powerFade = psA > 0 ? 1 - THREE.MathUtils.clamp((slipAngleAbs - 0.5 * psA) / (0.5 * psA), 0, 1) : 1;
+    backSide *= 1 - powerLoose * powerFade;
+    // rear wheels spin in place while the motor overpowers the tyres (visual spin + smoke)
+    this.powerSpinAmt = powerLoose * powerFade * THREE.MathUtils.clamp(Math.abs(speed) / 4, 0, 1);
+    this.burnoutSpin += this.powerSpinAmt * controls.throttle * 40 * dt;
     // surface grip → loose ground (dirt) cuts lateral grip per axle (tarmac = 1):
     // the car bites on the road, runs wide and drifts easily on the terrain.
     frontSide *= (this.wheelSurface[0].grip + this.wheelSurface[1].grip) * 0.5;
     backSide *= (this.wheelSurface[2].grip + this.wheelSurface[3].grip) * 0.5;
+    backSide *= 1 - this.tailKickAmt;
     frontSide = Math.max(0, frontSide);
     backSide = Math.max(0, backSide);
 
@@ -883,7 +912,7 @@ export class Car {
       const bias = front ? spec.driveBias.front : spec.driveBias.back;
       const driven = bias > 0.3;
       const lock = front ? frontLock : rearLock;
-      this.wheelSmoke[i] = Math.max(launchSpin * (driven ? bias : 0), lock * moving);
+      this.wheelSmoke[i] = Math.max(launchSpin * (driven ? bias : 0), lock * moving, driven ? this.powerSpinAmt * 0.8 : 0);
       // Burnout: the spinning drive wheels pour smoke and scrub a patch in place.
       if (burnout && driven) {
         this.wheelSmoke[i] = Math.max(this.wheelSmoke[i], controls.throttle);
@@ -942,6 +971,42 @@ export class Car {
       const rv3 = this._rv3; rv3.x = av.x; rv3.y = av.y * (1 - yk); rv3.z = av.z;
       this.body.setAngvel(rv3, true);
     }
+
+    // ----- Corner feel: rotation help + corner carry (grounded, driving, not handbraking) -----
+    // The wheels ask for a yaw rate (bicycle model); the body is nudged toward it so a turn
+    // starts quickly and a flick swings the car across, but never held back when the tail
+    // is already rotating faster. Corner carry returns the forward speed the tyres scrub.
+    if (grounded >= 2 && !handbraking && speed > 2 && Math.abs(controls.steer) > 0.05) {
+      const av2 = this.body.angvel();
+      const ya = spec.yawAssist ?? 0;
+      if (ya > 0) {
+        const slideAmt2 = 1 - this.rearHookup;
+        // fade out as the body slips away from its travel direction (so it can't outrun the
+        // tyres and spin) and cap the target at what the grip can hold (`yawAssistLat`, m/s² lateral)
+        const slipFade = 1 - THREE.MathUtils.clamp(Math.atan2(lateralSpeed, Math.max(speed, 3)) / 0.30, 0, 1);
+        const yawCap = (spec.yawAssistLat ?? 50) / Math.max(speed, 1);
+        const d = yawAssistDelta(
+          av2.y, THREE.MathUtils.clamp(wheelYawRate(this.steer, speed, this.wheelbase), -yawCap, yawCap),
+          ya * (1 - 0.7 * slideAmt2) * slipFade * (coasting ? 0.15 : 1), spec.yawAssistMax ?? 6, dt
+        );
+        const rvA = this._rv3; rvA.x = av2.x; rvA.y = av2.y + d; rvA.z = av2.z;
+        this.body.setAngvel(rvA, true);
+      }
+      const carry = controls.brake > 0 || speed > spec.topSpeed ? 0 : cornerCarryDelta(
+        spec.cornerCarry ?? 0, this.prevHSpeed - Math.hypot(vel.x, vel.z), controls.throttle, 30, dt
+      );
+      if (carry > 0) {
+        const v = this.body.linvel();
+        const sp = Math.hypot(v.x, v.z);
+        if (sp > 1e-3) {
+          const f = (sp + carry) / sp;
+          const rvC = this._rv3; rvC.x = v.x * f; rvC.y = v.y; rvC.z = v.z * f;
+          this.body.setLinvel(rvC, true);
+        }
+      }
+    }
+
+    { const vE = this.body.linvel(); this.prevHSpeed = Math.hypot(vE.x, vE.z); }
 
     // Burnout hold: with throttle AND brake/handbrake held, the brakes overpower the
     // drive — heavily damp the horizontal velocity so the car stays stuck in place

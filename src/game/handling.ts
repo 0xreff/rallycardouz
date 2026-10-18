@@ -20,6 +20,40 @@ export function shouldHoldHandbrake(
     horizontalSpeed <= 0.15 && Math.abs(yawRate) <= 0.15;
 }
 
+/**
+ * Yaw-rate (rad/s) the front wheels are asking for: the bicycle-model rate for the
+ * CURRENT wheel angle, so turning the wheels is what turns the car. `steerAngle` is in
+ * the Car's wheel sign (+ = wheels left); the result is in Rapier's angvel.y sign
+ * (+ = wheels left maps to + here).
+ */
+export function wheelYawRate(steerAngle: number, speed: number, wheelbase: number): number {
+  return (speed * Math.tan(steerAngle)) / wheelbase;
+}
+
+/**
+ * Rotation help: the extra yaw velocity (rad/s) to add this step so the body follows
+ * the wheels faster. It only ever helps: it pushes toward `target` when the car is
+ * rotating too slowly (or the wrong way, as in a left-right flick) and never brakes a
+ * rotation that is already beyond the target, so a drifting tail keeps swinging.
+ */
+export function yawAssistDelta(current: number, target: number, gain: number, maxAccel: number, dt: number): number {
+  if (Math.abs(target) < 0.02) return 0;
+  const helping = current * target <= 0 || Math.abs(current) < Math.abs(target);
+  if (!helping) return 0;
+  return clamp(gain * (target - current), -maxAccel, maxAccel) * dt;
+}
+
+/**
+ * Corner carry: forward speed (m/s) handed back this step. `loss` is how much horizontal
+ * speed the car lost since the last step; under throttle a fraction `carry` (0..1) of it is
+ * restored, capped at `maxAccel` m/s^2 so a real crash is NOT undone. A corner then costs a
+ * little speed instead of bleeding it, and coasting or braking still slow the car normally.
+ */
+export function cornerCarryDelta(carry: number, loss: number, throttle: number, maxAccel: number, dt: number): number {
+  if (carry <= 0 || loss <= 0 || throttle <= 0.2) return 0;
+  return Math.min(loss * carry, maxAccel * dt);
+}
+
 /** Clamp `v` into [lo, hi]. */
 export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;

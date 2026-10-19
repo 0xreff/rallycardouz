@@ -95,9 +95,42 @@ async function preloadAssets(): Promise<void> {
   console.info("[Preload] All models and audio cached.");
 }
 
+/**
+ * Wait for the garage (car-select screen) to dispatch a 'car-selected' event,
+ * then boot the game with the chosen car.
+ *
+ * If the URL already has ?car=<key> (e.g. a direct link or refresh during play),
+ * skip the garage and boot immediately.
+ */
+function waitForGarage(): Promise<string> {
+  const forced = new URLSearchParams(window.location.search).get("car");
+  if (forced) {
+    // Direct link with ?car= — skip the garage, hide it if present
+    const garage = document.getElementById("garage");
+    if (garage) garage.style.display = "none";
+    return Promise.resolve(forced);
+  }
+  return new Promise((resolve) => {
+    window.addEventListener("car-selected", ((e: CustomEvent<string>) => {
+      resolve(e.detail);
+    }) as EventListener, { once: true });
+  });
+}
+
 async function boot() {
   const container = document.getElementById("app")!;
   const loader = document.getElementById("loader")!;
+
+  // Wait for the garage to tell us which car the player picked.
+  const carKey = await waitForGarage();
+
+  // Set the car key as a URL param so Game.ts's detectCar() reads it.
+  const url = new URL(window.location.href);
+  url.searchParams.set("car", carKey);
+  window.history.replaceState({}, "", url.toString());
+
+  // Show the loading overlay
+  loader.style.display = "";
 
   try {
     // Start preloading assets in parallel with physics initialization

@@ -4,7 +4,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Reborn Racer — 2026</title>
+  <title>Revolt Reborn — Choose Your Machine</title>
+  <meta name="description" content="Select your rally car and enter the Revolt Reborn championship." />
   <link rel="preload" href="./assets/toyota.glb" as="fetch" crossorigin />
   <link rel="preload" href="./assets/toyota6.glb" as="fetch" crossorigin />
   <link rel="preload" href="./assets/toyota-24.glb" as="fetch" crossorigin />
@@ -12,9 +13,33 @@
   <link rel="preload" href="./assets/audio/engine/manifest.json" as="fetch" crossorigin />
   <link rel="preload" href="./assets/audio/engine/toyota/manifest.json" as="fetch" crossorigin />
   <link rel="preload" href="./assets/audio/engine/toyota6/manifest.json" as="fetch" crossorigin />
+  <!-- Display fonts for the garage -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap" />
   <style>
+    /* ===================================================================
+       GLOBAL RESET + GAME CANVAS
+       =================================================================== */
     :root {
       color-scheme: dark;
+      /* Garage design tokens */
+      --background: oklch(0.12 0.005 260);
+      --foreground: oklch(0.96 0.005 260);
+      --card: oklch(0.17 0.008 260 / 70%);
+      --card-foreground: oklch(0.96 0.005 260);
+      --primary: oklch(0.72 0.19 50);
+      --primary-foreground: oklch(0.12 0.005 260);
+      --secondary: oklch(0.22 0.01 260);
+      --muted: oklch(0.22 0.01 260);
+      --muted-foreground: oklch(0.65 0.015 260);
+      --border: oklch(1 0 0 / 12%);
+      --vehicle-truck: oklch(0.78 0.16 55);
+      --vehicle-prado: oklch(0.82 0.1 210);
+      --vehicle-pickup: oklch(0.72 0.19 25);
+      --desert-overlay: oklch(0.12 0.005 260 / 60%);
+      --font-display: "Orbitron", sans-serif;
+      --font-body: "Rajdhani", sans-serif;
     }
 
     * {
@@ -29,6 +54,8 @@
       height: 100%;
       overflow: hidden;
       background: #0a0e1a;
+      font-family: var(--font-body);
+      color: var(--foreground);
     }
 
     #app {
@@ -42,6 +69,388 @@
       height: 100%;
     }
 
+    /* ===================================================================
+       GARAGE (CAR SELECT SCREEN)
+       =================================================================== */
+    #garage {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: var(--background);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #garage.garage--hidden {
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+
+    .garage-bg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center;
+      pointer-events: none;
+    }
+
+    .garage-shade {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(180deg, var(--desert-overlay), transparent 45%, var(--background)),
+        linear-gradient(90deg, var(--desert-overlay), var(--desert-overlay));
+    }
+
+    /* Top bar */
+    .garage-header {
+      position: relative;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 24px;
+    }
+
+    @media (min-width: 768px) {
+      .garage-header { padding: 20px 48px; }
+    }
+
+    .garage-logo {
+      font-family: var(--font-display);
+      font-size: 14px;
+      letter-spacing: 0.4em;
+      color: var(--muted-foreground);
+    }
+
+    .garage-logo span {
+      color: var(--foreground);
+    }
+
+    .garage-counter {
+      font-family: var(--font-display);
+      font-size: 12px;
+      letter-spacing: 0.3em;
+      color: var(--muted-foreground);
+    }
+
+    /* Main content grid */
+    .garage-body {
+      position: relative;
+      z-index: 10;
+      display: grid;
+      gap: 32px;
+      padding: 0 24px 24px;
+      flex: 1;
+      align-content: start;
+    }
+
+    @media (min-width: 768px) {
+      .garage-body { padding: 0 48px 48px; }
+    }
+
+    @media (min-width: 1024px) {
+      .garage-body {
+        grid-template-columns: 1fr 380px;
+        align-content: center;
+      }
+    }
+
+    /* Car stage (left) */
+    .car-stage {
+      position: relative;
+    }
+
+    .car-tag {
+      font-family: var(--font-display);
+      font-size: 12px;
+      letter-spacing: 0.5em;
+      text-transform: uppercase;
+    }
+
+    .car-title {
+      font-family: var(--font-display);
+      font-size: clamp(28px, 5vw, 56px);
+      font-weight: 900;
+      line-height: 1.1;
+      word-break: break-word;
+      text-shadow: 0 0 30px color-mix(in oklab, var(--car-hue, var(--primary)) 70%, transparent);
+    }
+
+    .car-image {
+      display: block;
+      margin-top: 16px;
+      width: 100%;
+      aspect-ratio: 16/9;
+      object-fit: contain;
+      filter: drop-shadow(0 8px 32px rgba(0,0,0,0.5));
+    }
+
+    .car-image.car-animate-in {
+      animation: carIn 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    .car-title.car-animate-in {
+      animation: carIn 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    @keyframes carIn {
+      from { opacity: 0; transform: translateX(60px) scale(0.96); filter: blur(8px); }
+      to { opacity: 1; transform: none; filter: none; }
+    }
+
+    /* Navigation arrows + dots */
+    .car-nav {
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+    }
+
+    .car-nav-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 48px;
+      padding: 12px 24px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--foreground);
+      font-family: var(--font-display);
+      font-size: 18px;
+      cursor: pointer;
+      transition: background 0.2s;
+      clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+    }
+
+    .car-nav-btn:hover {
+      background: var(--secondary);
+    }
+
+    .car-dots {
+      display: flex;
+      gap: 8px;
+    }
+
+    .car-dot {
+      height: 8px;
+      border-radius: 9999px;
+      border: none;
+      cursor: pointer;
+      transition: width 0.3s, background 0.3s;
+      padding: 0;
+    }
+
+    .car-dot.active {
+      width: 40px;
+    }
+
+    .car-dot:not(.active) {
+      width: 14px;
+      background: var(--muted);
+    }
+
+    /* Spec panel (right) */
+    .spec-panel {
+      align-self: center;
+      border: 1px solid var(--border);
+      background: var(--card);
+      padding: 24px;
+      backdrop-filter: blur(20px);
+      clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+    }
+
+    .spec-badges {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .spec-badge {
+      border: 1px solid var(--border);
+      background: oklch(0.12 0.005 260 / 40%);
+      padding: 12px 0;
+    }
+
+    .spec-badge-label {
+      font-size: 10px;
+      letter-spacing: 0.3em;
+      color: var(--muted-foreground);
+    }
+
+    .spec-badge-value {
+      font-family: var(--font-display);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    /* Stat bars */
+    .stat-row {
+      margin-bottom: 16px;
+    }
+
+    .stat-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .stat-head {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      margin-bottom: 4px;
+    }
+
+    .stat-label {
+      color: var(--muted-foreground);
+    }
+
+    .stat-value {
+      font-family: var(--font-display);
+    }
+
+    .stat-track {
+      height: 8px;
+      overflow: hidden;
+      background: var(--secondary);
+      position: relative;
+    }
+
+    .stat-fill {
+      height: 100%;
+      transition: width 0.7s ease;
+    }
+
+    /* Enter race button */
+    .enter-btn {
+      display: block;
+      width: 100%;
+      margin-top: 32px;
+      padding: 20px;
+      border: none;
+      cursor: pointer;
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 900;
+      letter-spacing: 0.3em;
+      color: var(--primary-foreground);
+      position: relative;
+      overflow: hidden;
+      transition: filter 0.2s;
+      clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+    }
+
+    .enter-btn:hover {
+      filter: brightness(1.1);
+    }
+
+    .enter-btn .sweep {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      animation: sweep 2.4s linear infinite;
+    }
+
+    .enter-btn .btn-text {
+      position: relative;
+    }
+
+    @keyframes sweep {
+      from { transform: translateX(-100%); }
+      to { transform: translateX(100%); }
+    }
+
+    .garage-hint {
+      margin-top: 12px;
+      text-align: center;
+      font-size: 12px;
+      letter-spacing: 0.1em;
+      color: var(--muted-foreground);
+    }
+
+    /* ===================================================================
+       LOADING OVERLAY (after car is selected, before game boots)
+       =================================================================== */
+    #garage-loading {
+      position: fixed;
+      inset: 0;
+      z-index: 110;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: oklch(0.12 0.005 260 / 95%);
+      backdrop-filter: blur(12px);
+      animation: fadeIn 0.3s ease;
+    }
+
+    #garage-loading.show {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .loading-subtitle {
+      font-family: var(--font-display);
+      font-size: 12px;
+      letter-spacing: 0.5em;
+      color: var(--muted-foreground);
+    }
+
+    .loading-car-name {
+      margin-top: 12px;
+      font-family: var(--font-display);
+      font-size: clamp(28px, 5vw, 48px);
+      font-weight: 900;
+      text-align: center;
+      padding: 0 24px;
+    }
+
+    .loading-bar-track {
+      margin-top: 32px;
+      width: 256px;
+      height: 4px;
+      overflow: hidden;
+      background: var(--secondary);
+    }
+
+    .loading-bar-fill {
+      height: 100%;
+      width: 50%;
+      animation: sweep 2.4s linear infinite;
+    }
+
+    .loading-back-btn {
+      margin-top: 40px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-family: var(--font-body);
+      font-size: 14px;
+      letter-spacing: 0.1em;
+      color: var(--muted-foreground);
+      transition: color 0.2s;
+    }
+
+    .loading-back-btn:hover {
+      color: var(--foreground);
+    }
+
+    /* ===================================================================
+       GAME HUD (visible after game boots)
+       =================================================================== */
     #hud {
       position: fixed;
       left: 0;
@@ -51,6 +460,159 @@
       pointer-events: none;
       font-family: "Segoe UI", system-ui, sans-serif;
       color: #eaf2ff;
+      z-index: 50;
+    }
+
+    /* ===================================================================
+       GO GARAGE BUTTON (visible while playing in HUD)
+       =================================================================== */
+    .hud-garage-btn {
+      position: absolute;
+      top: 20px;
+      right: 24px;
+      pointer-events: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 18px;
+      background: rgba(14, 18, 30, 0.82);
+      border: 1px solid rgba(255, 140, 40, 0.5);
+      color: #ffffff;
+      font-family: var(--font-display);
+      cursor: pointer;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+      box-shadow: 0 4px 22px rgba(0, 0, 0, 0.55), inset 0 0 14px rgba(255, 140, 40, 0.12);
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 60;
+      user-select: none;
+    }
+
+    .hud-garage-btn:hover {
+      background: rgba(26, 30, 48, 0.94);
+      border-color: rgba(255, 175, 60, 0.95);
+      box-shadow: 0 0 28px rgba(255, 140, 40, 0.55), inset 0 0 20px rgba(255, 140, 40, 0.22);
+      transform: translateY(-2px);
+      color: #ffb660;
+    }
+
+    .hud-garage-btn:active {
+      transform: translateY(1px) scale(0.98);
+      box-shadow: 0 0 12px rgba(255, 140, 40, 0.3);
+    }
+
+    .garage-btn-icon {
+      flex-shrink: 0;
+      color: var(--primary);
+      filter: drop-shadow(0 0 8px rgba(255, 140, 40, 0.75));
+      transition: transform 0.22s ease;
+    }
+
+    .hud-garage-btn:hover .garage-btn-icon {
+      transform: scale(1.15) rotate(-3deg);
+    }
+
+    .hud-garage-col {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      line-height: 1.15;
+    }
+
+    .hud-garage-main {
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: 0.18em;
+      color: #ffffff;
+      text-transform: uppercase;
+    }
+
+    .hud-garage-btn:hover .hud-garage-main {
+      color: #ffd285;
+      text-shadow: 0 0 12px rgba(255, 180, 80, 0.75);
+    }
+
+    .hud-garage-sub {
+      font-family: var(--font-body);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.22em;
+      color: rgba(255, 255, 255, 0.6);
+      text-transform: uppercase;
+    }
+
+    .hud-garage-kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 6px;
+      margin-left: 2px;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.95);
+      box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4);
+    }
+
+    @media (max-width: 640px) {
+      .hud-garage-btn {
+        top: 14px;
+        right: 14px;
+        padding: 8px 12px;
+        gap: 8px;
+      }
+      .hud-garage-sub {
+        display: none;
+      }
+    }
+
+    /* Transition overlay when returning to garage */
+    #garageTransition {
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      background: #0a0e1a;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease-out;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    #garageTransition.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .garage-transition-spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid rgba(255, 140, 40, 0.2);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .garage-transition-text {
+      font-family: var(--font-display);
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.35em;
+      color: #ff9838;
+      text-shadow: 0 0 20px rgba(255, 152, 56, 0.6);
     }
 
     #speed {
@@ -182,18 +744,25 @@
       font-size: 12px;
     }
 
+    /* ===================================================================
+       GAME LOADING OVERLAY (physics + renderer)
+       =================================================================== */
     #loader {
       position: fixed;
       inset: 0;
-      display: flex;
+      display: none;
       align-items: center;
       justify-content: center;
       flex-direction: column;
       gap: 24px;
       background: #0a0e1a;
-      z-index: 10;
+      z-index: 150;
       font-family: "Segoe UI", system-ui, sans-serif;
       transition: opacity 0.5s ease;
+    }
+
+    #loader.show {
+      display: flex;
     }
 
     #loader .race-title {
@@ -489,13 +1058,92 @@
         stroke-dashoffset: 0;
       }
     }
+
+    /* ===================================================================
+       Reduced-motion preference
+       =================================================================== */
+    @media (prefers-reduced-motion: reduce) {
+      .car-animate-in,
+      .enter-btn .sweep { animation: none !important; }
+    }
   </style>
 </head>
 
 <body>
+  <!-- ================================================================
+       1. GARAGE — Car selection screen (visible first)
+       ================================================================ -->
+  <div id="garage">
+    <img class="garage-bg" src="./assets/garage/desert-gate.png" alt="Desert rally entrance" />
+    <div class="garage-shade"></div>
+
+    <!-- Top bar -->
+    <header class="garage-header">
+      <div class="garage-logo">REVOLT <span>REBORN</span></div>
+      <div class="garage-counter" id="garageCounter">GARAGE · 01/03</div>
+    </header>
+
+    <!-- Main content -->
+    <div class="garage-body">
+      <!-- Car stage -->
+      <div class="car-stage">
+        <p class="car-tag" id="carTag">CUSTOM RALLY PROTOTYPE</p>
+        <h1 class="car-title car-animate-in" id="carTitle">TROPHY TRUCK</h1>
+        <img class="car-image car-animate-in" id="carImage"
+             src="./assets/garage/trophy-truck.png" alt="Trophy Truck"
+             width="1536" height="864" />
+        <div class="car-nav">
+          <button class="car-nav-btn" id="prevBtn" aria-label="Previous car">←</button>
+          <div class="car-dots" id="carDots"></div>
+          <button class="car-nav-btn" id="nextBtn" aria-label="Next car">→</button>
+        </div>
+      </div>
+
+      <!-- Spec panel -->
+      <aside class="spec-panel">
+        <div class="spec-badges" id="specBadges"></div>
+        <div id="specBars"></div>
+        <button class="enter-btn" id="enterBtn">
+          <span class="sweep"></span>
+          <span class="btn-text">ENTER RACE</span>
+        </button>
+        <p class="garage-hint">← → TO BROWSE · ENTER TO START</p>
+      </aside>
+    </div>
+  </div>
+
+  <!-- ================================================================
+       2. LOADING OVERLAY (after car selected, while game boots)
+       ================================================================ -->
+  <div id="garage-loading">
+    <p class="loading-subtitle">LOADING STAGE</p>
+    <h2 class="loading-car-name" id="loadingCarName">TROPHY TRUCK</h2>
+    <div class="loading-bar-track">
+      <div class="loading-bar-fill" id="loadingBarFill"></div>
+    </div>
+    <button class="loading-back-btn" id="loadingBackBtn">BACK TO GARAGE</button>
+  </div>
+
+  <!-- ================================================================
+       3. GAME (canvas container + HUD)
+       ================================================================ -->
   <div id="app"></div>
   <div id="hud">
     <div id="car"><span class="lbl">CAR</span> <span id="carName">—</span></div>
+    
+    <!-- Go to Garage / Select Car button -->
+    <button id="goGarageBtn" class="hud-garage-btn" title="Return to garage to choose car (Shortcut: G)">
+      <svg class="garage-btn-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        <polyline points="9 22 9 12 15 12 15 22"></polyline>
+      </svg>
+      <div class="hud-garage-col">
+        <span class="hud-garage-main">GO GARAGE</span>
+        <span class="hud-garage-sub">SELECT CAR</span>
+      </div>
+      <kbd class="hud-garage-kbd">G</kbd>
+    </button>
+
     <div id="gearbox">
       <div id="gear">1</div>
       <div id="rpm">
@@ -505,13 +1153,23 @@
     </div>
     <div id="speed"><span class="val">0</span><span class="unit">KM/H</span></div>
     <div id="help">
-      <kbd>W</kbd>/<kbd>↑</kbd> accelerate &nbsp; <kbd>S</kbd>/<kbd>↓</kbd> front brake / reverse<br />
+      <kbd>G</kbd> go garage &nbsp; <kbd>W</kbd>/<kbd>↑</kbd> accelerate &nbsp; <kbd>S</kbd>/<kbd>↓</kbd> front brake / reverse<br />
       <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer &nbsp; <kbd>Space</kbd> handbrake (slide turns)<br />
-      <kbd>F</kbd> flip upright &nbsp; <kbd>R</kbd> reset to start &nbsp; <kbd>C</kbd> change car &nbsp; <kbd>V</kbd>
+      <kbd>F</kbd> flip upright &nbsp; <kbd>R</kbd> reset to start &nbsp; <kbd>C</kbd> quick swap car &nbsp; <kbd>V</kbd>
       change view<br />
       <kbd>T</kbd> hold on the 170 km/h limiter to unlock 6th gear
     </div>
   </div>
+
+  <!-- Transition overlay when returning to garage -->
+  <div id="garageTransition">
+    <div class="garage-transition-spinner"></div>
+    <div class="garage-transition-text">ENTERING GARAGE...</div>
+  </div>
+
+  <!-- ================================================================
+       4. GAME LOADING OVERLAY (physics & renderer — shown by main.ts)
+       ================================================================ -->
   <div id="loader">
     <svg id="logo-12" viewBox="180 230 870 790" role="img" aria-label="12">
       <defs>
@@ -551,6 +1209,242 @@
     </div>
     <div class="sub">Initializing physics &amp; renderer…</div>
   </div>
+
+  <!-- ================================================================
+       5. GARAGE LOGIC (vanilla JS, runs before main.ts)
+       ================================================================ -->
+  <script>
+    (function garage() {
+      // --- Car roster: id -> game CarSpec key, images are in public/assets/garage/ ---
+      var CARS = [
+        {
+          id: "trophy-truck", game: "toyota",
+          name: "TROPHY TRUCK", tag: "Custom Rally Prototype",
+          img: "./assets/garage/trophy-truck.png",
+          hue: "oklch(0.78 0.16 55)",
+          stats: { Speed: 82, Handling: 90, Acceleration: 88, Grip: 76 },
+          hp: 420, weight: "1,180 kg", drive: "AWD"
+        },
+        {
+          id: "prado-90", game: "toyota6",
+          name: "LAND CRUISER PRADO", tag: "Toyota · 90 Series",
+          img: "./assets/garage/land-cruiser-prado-90.png",
+          hue: "oklch(0.82 0.1 210)",
+          stats: { Speed: 78, Handling: 84, Acceleration: 97, Grip: 88 },
+          hp: 510, weight: "1,320 kg", drive: "AWD"
+        },
+        {
+          id: "land-cruiser-79", game: "toyota24",
+          name: "LAND CRUISER 79", tag: "Toyota · 70 Series Pickup",
+          img: "./assets/garage/land-cruiser-79.png",
+          hue: "oklch(0.72 0.19 25)",
+          stats: { Speed: 96, Handling: 80, Acceleration: 85, Grip: 82 },
+          hp: 560, weight: "1,240 kg", drive: "RWD"
+        }
+      ];
+
+      var current = 0;
+      var entered = false;
+      var loadingTimeout = null;
+
+      // Grab DOM elements
+      var garageEl         = document.getElementById("garage");
+      var garageLoading    = document.getElementById("garage-loading");
+      var garageCounter    = document.getElementById("garageCounter");
+      var carTag           = document.getElementById("carTag");
+      var carTitle         = document.getElementById("carTitle");
+      var carImage         = document.getElementById("carImage");
+      var carDots          = document.getElementById("carDots");
+      var prevBtn          = document.getElementById("prevBtn");
+      var nextBtn          = document.getElementById("nextBtn");
+      var enterBtn         = document.getElementById("enterBtn");
+      var specBadges       = document.getElementById("specBadges");
+      var specBars         = document.getElementById("specBars");
+      var loadingCarName   = document.getElementById("loadingCarName");
+      var loadingBarFill   = document.getElementById("loadingBarFill");
+      var loadingBackBtn   = document.getElementById("loadingBackBtn");
+
+      // If URL already has ?car=, skip the garage entirely (main.ts handles it)
+      if (new URLSearchParams(window.location.search).get("car")) {
+        garageEl.style.display = "none";
+        return;
+      }
+
+      // Build dot indicators
+      CARS.forEach(function(_, n) {
+        var dot = document.createElement("button");
+        dot.className = "car-dot";
+        dot.setAttribute("aria-label", CARS[n].name);
+        dot.addEventListener("click", function() { setCar(n); });
+        carDots.appendChild(dot);
+      });
+
+      function setCar(index) {
+        current = ((index % CARS.length) + CARS.length) % CARS.length;
+        try { sessionStorage.setItem("revolt_last_car_idx", String(current)); } catch (e) {}
+        var car = CARS[current];
+
+        // Counter
+        garageCounter.textContent = "GARAGE · " + String(current + 1).padStart(2, "0") + "/" + String(CARS.length).padStart(2, "0");
+
+        // Tag + title
+        carTag.textContent = car.tag.toUpperCase();
+        carTag.style.color = car.hue;
+        carTitle.textContent = car.name;
+        carTitle.style.textShadow = "0 0 30px " + car.hue;
+
+        // Re-trigger animation
+        carTitle.classList.remove("car-animate-in");
+        carImage.classList.remove("car-animate-in");
+        void carTitle.offsetWidth; // force reflow
+        carTitle.classList.add("car-animate-in");
+        carImage.classList.add("car-animate-in");
+
+        // Image
+        carImage.src = car.img;
+        carImage.alt = car.name;
+
+        // Dots
+        var dots = carDots.querySelectorAll(".car-dot");
+        for (var i = 0; i < dots.length; i++) {
+          if (i === current) {
+            dots[i].classList.add("active");
+            dots[i].style.background = car.hue;
+          } else {
+            dots[i].classList.remove("active");
+            dots[i].style.background = "var(--muted)";
+          }
+        }
+
+        // Spec badges
+        specBadges.innerHTML = "";
+        [["POWER", car.hp + " HP"], ["WEIGHT", car.weight], ["DRIVE", car.drive]].forEach(function(pair) {
+          var div = document.createElement("div");
+          div.className = "spec-badge";
+          div.innerHTML = '<div class="spec-badge-label">' + pair[0] + '</div><div class="spec-badge-value">' + pair[1] + '</div>';
+          specBadges.appendChild(div);
+        });
+
+        // Stat bars
+        specBars.innerHTML = "";
+        Object.keys(car.stats).forEach(function(key) {
+          var val = car.stats[key];
+          var row = document.createElement("div");
+          row.className = "stat-row";
+          row.innerHTML =
+            '<div class="stat-head"><span class="stat-label">' + key.toUpperCase() + '</span><span class="stat-value">' + val + '</span></div>' +
+            '<div class="stat-track"><div class="stat-fill" style="width:' + val + '%;background:linear-gradient(90deg,transparent,' + car.hue + ');box-shadow:0 0 12px ' + car.hue + '"></div></div>';
+          specBars.appendChild(row);
+        });
+
+        // Enter button colour
+        enterBtn.style.background = car.hue;
+        enterBtn.style.boxShadow = "0 0 40px " + car.hue;
+      }
+
+      function go(dir) {
+        if (entered) return;
+        setCar(current + dir);
+      }
+
+      function enterRace() {
+        if (entered) return;
+        entered = true;
+        var car = CARS[current];
+
+        // Show the loading overlay
+        loadingCarName.textContent = car.name;
+        loadingCarName.style.textShadow = "0 0 30px " + car.hue;
+        loadingBarFill.style.background = car.hue;
+        garageLoading.classList.add("show");
+
+        // After a brief loading screen, hide the garage and fire the event
+        loadingTimeout = setTimeout(function() {
+          garageEl.classList.add("garage--hidden");
+          setTimeout(function() { garageEl.style.display = "none"; }, 500);
+          garageLoading.classList.remove("show");
+
+          // Show the game's own loader
+          document.getElementById("loader").classList.add("show");
+
+          // Dispatch the event that main.ts is waiting for
+          window.dispatchEvent(new CustomEvent("car-selected", { detail: car.game }));
+        }, 1200);
+      }
+
+      function backToGarage() {
+        entered = false;
+        if (loadingTimeout) clearTimeout(loadingTimeout);
+        garageLoading.classList.remove("show");
+      }
+
+      // Wire up UI
+      prevBtn.addEventListener("click", function() { go(-1); });
+      nextBtn.addEventListener("click", function() { go(1); });
+      enterBtn.addEventListener("click", enterRace);
+      loadingBackBtn.addEventListener("click", backToGarage);
+
+      // Keyboard controls
+      window.addEventListener("keydown", function(e) {
+        if (entered) {
+          if (e.key === "Escape") backToGarage();
+          return;
+        }
+        if (e.key === "ArrowRight") go(1);
+        if (e.key === "ArrowLeft") go(-1);
+        if (e.key === "Enter") enterRace();
+      });
+
+      // Initial render - restore last chosen car if available
+      var savedCar = 0;
+      try {
+        var s = sessionStorage.getItem("revolt_last_car_idx");
+        if (s !== null) {
+          var n = parseInt(s, 10);
+          if (!isNaN(n) && n >= 0 && n < CARS.length) savedCar = n;
+        }
+      } catch (e) {}
+      setCar(savedCar);
+    })();
+
+    // ===================================================================
+    // 6. RETURN TO GARAGE LOGIC (active while driving)
+    // ===================================================================
+    (function initGarageReturn() {
+      function returnToGarage() {
+        var overlay = document.getElementById("garageTransition");
+        if (overlay) overlay.classList.add("active");
+
+        // Remove ?car= from URL so the garage screen is shown on reload
+        var url = new URL(window.location.href);
+        url.searchParams.delete("car");
+
+        setTimeout(function() {
+          window.location.href = url.pathname + (url.searchParams.toString() ? '?' + url.searchParams.toString() : '');
+        }, 220);
+      }
+
+      var goGarageBtn = document.getElementById("goGarageBtn");
+      if (goGarageBtn) {
+        goGarageBtn.addEventListener("click", function(e) {
+          e.preventDefault();
+          returnToGarage();
+        });
+      }
+
+      // Keyboard shortcut: Press 'G' to return to garage while playing
+      window.addEventListener("keydown", function(e) {
+        if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "SELECT")) return;
+        var garage = document.getElementById("garage");
+        if (garage && garage.style.display !== "none" && !garage.classList.contains("garage--hidden")) return;
+        if (e.key === "g" || e.key === "G") {
+          returnToGarage();
+        }
+      });
+    })();
+  </script>
+
+  <!-- 12-logo animation (for game loader) -->
   <script>
     (function buildLogo12() {
       var S = 64, H = S * 0.866, STEP = 9, TRI_DUR = 420;
@@ -590,6 +1484,8 @@
       setInterval(render, total);
     })();
   </script>
+
+  <!-- Game module (waits for 'car-selected' event before booting) -->
   <script type="module" src="/src/main.ts"></script>
 </body>
 

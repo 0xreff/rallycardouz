@@ -1,0 +1,100 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --font-display: "Orbitron", sans-serif;
+  --font-sans: "Rajdhani", sans-serif;
+}
+
+:root {
+  --radius: 0.25rem;
+  --background: oklch(0.12 0.005 260);
+  --foreground: oklch(0.96 0.005 260);
+  --card: oklch(0.17 0.008 260 / 70%);
+  --card-foreground: oklch(0.96 0.005 260);
+  --popover: oklch(0.17 0.008 260);
+  --popover-foreground: oklch(0.96 0.005 260);
+  --primary: oklch(0.72 0.19 50);
+  --primary-foreground: oklch(0.12 0.005 260);
+  --secondary: oklch(0.22 0.01 260);
+  --secondary-foreground: oklch(0.96 0.005 260);
+  --muted: oklch(0.22 0.01 260);
+  --muted-foreground: oklch(0.65 0.015 260);
+  --accent: oklch(0.72 0.19 50);
+  --accent-foreground: oklch(0.12 0.005 260);
+  --destructive: oklch(0.6 0.22 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.72 0.19 50);
+  --vehicle-truck: oklch(0.78 0.16 55);
+  --vehicle-prado: oklch(0.82 0.1 210);
+  --vehicle-pickup: oklch(0.72 0.19 25);
+  --desert-overlay: oklch(0.12 0.005 260 / 60%);
+}
+
+.desert-shade {
+  background: linear-gradient(180deg, var(--desert-overlay), transparent 45%, var(--background)), linear-gradient(90deg, var(--desert-overlay), var(--desert-overlay));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-car-in, .animate-sweep { animation: none; }
+}
+
+@layer base {
+  * { border-color: var(--color-border); }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+}
+
+@utility glow-text {
+  text-shadow: 0 0 30px color-mix(in oklab, var(--car, var(--primary)) 70%, transparent);
+}
+
+@utility scanlines {
+  background-image: repeating-linear-gradient(0deg, oklch(1 0 0 / 3%) 0 1px, transparent 1px 3px);
+}
+
+@utility clip-corner {
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+}
+
+@keyframes sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+@keyframes carIn {
+  from { opacity: 0; transform: translateX(60px) scale(0.96); filter: blur(8px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+@utility animate-car-in { animation: carIn 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@utility animate-sweep { animation: sweep 2.4s linear infinite; }

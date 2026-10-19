@@ -24,17 +24,10 @@ import { EngineFx, type FxSink } from "../engine/EngineFx";
 import { WindAudio } from "../engine/WindAudio";
 import { onAudioSettingsChanged } from "./AudioSettings";
 import Stats from 'stats-gl';
+import { PerfPanel } from "./PerfPanel";
+import { WorldLightsPanel } from "./WorldLightsPanel";
 import { setLightViewer, getLightSettings, setLightSettings } from "./CarLights";
 import { Weather } from "../engine/Weather";
-
-// Dev-only control panels (PerfPanel = P, WorldLightsPanel = K). Their files are gitignored: they
-// are used when present and skipped otherwise, so a checkout without them still builds and runs.
-interface PerfPanelLike { endFrame(): void }
-interface WorldLightsLike { switchLook(id: string): void }
-const optionalPanels = import.meta.glob<{
-  PerfPanel?: new (opts: Record<string, unknown>) => PerfPanelLike;
-  WorldLightsPanel?: new (opts: Record<string, unknown>) => WorldLightsLike;
-}>(["./PerfPanel.ts", "./WorldLightsPanel.ts"], { eager: true });
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
@@ -43,8 +36,8 @@ export class Game {
   private composer: EffectComposer;
   private bloom!: UnrealBloomPass;
   private stats: Stats;
-  private perf?: PerfPanelLike; // debug toggles for finding the GPU bottleneck (press P)
-  worldLights?: WorldLightsLike; // press K: sun/moon, sky, fog, post FX, ground
+  private perf!: PerfPanel; // debug toggles for finding the GPU bottleneck (press P)
+  worldLights!: WorldLightsPanel; // press K: sun/moon, sky, fog, post FX, ground
   private weather!: Weather;   // weather / time-of-day dropdown
   private perfFlags = { cullFarTerrain: true };
   private frameNo = 0;
@@ -62,7 +55,7 @@ export class Game {
   private engineFx: EngineFx | null = null; // overrun crackle / turbo spool (initialised after audio loads)
   private windAudio: WindAudio | null = null;   // speed-driven wind (synth now, recorded loop optional)
   private carKeys = Object.keys(CARS);
-  private carIndex = this.carKeys.indexOf(DEFAULT_CAR);
+  private carIndex = this.carKeys.indexOf(detectCar()); // car chosen on the select screen (?car=...)
   private clock = new THREE.Clock();
   private atmosphere!: NightAtmosphere;
   private atmospherePass!: AtmospherePass;
@@ -157,8 +150,7 @@ export class Game {
     const smaa = new SMAAPass(window.innerWidth * pr, window.innerHeight * pr);
     this.composer.addPass(smaa);
 
-    const PerfPanelCls = optionalPanels["./PerfPanel.ts"]?.PerfPanel;
-    this.perf = PerfPanelCls && new PerfPanelCls({
+    this.perf = new PerfPanel({
       renderer: this.renderer,
       composer: this.composer,
       scene: this.scene,
@@ -169,8 +161,7 @@ export class Game {
       flags: this.perfFlags,
     });
 
-    const WorldLightsCls = optionalPanels["./WorldLightsPanel.ts"]?.WorldLightsPanel;
-    this.worldLights = WorldLightsCls && new WorldLightsCls({
+    this.worldLights = new WorldLightsPanel({
       theme: this.theme,
       scene: this.scene,
       renderer: this.renderer,
@@ -525,11 +516,21 @@ export class Game {
       }
 
       this.composer.render();
-      this.perf?.endFrame();
+      this.perf.endFrame();
       this.stats.update();
     };
     loop();
   }
+}
+
+/**
+ * The car picked on the car-select screen, passed in the URL as ?car=<key>:
+ *   trophy truck -> ?car=toyota     prado -> ?car=toyota6     land cruiser -> ?car=toyota24
+ * (any key of CARS works, e.g. ?car=ram). Missing or unknown -> DEFAULT_CAR.
+ */
+function detectCar(): string {
+  const forced = new URLSearchParams(window.location.search).get("car")?.trim().toLowerCase();
+  return forced && Object.prototype.hasOwnProperty.call(CARS, forced) ? forced : DEFAULT_CAR;
 }
 
 function detectTheme(): Theme {

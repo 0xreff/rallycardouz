@@ -24,10 +24,14 @@ import { EngineFx, type FxSink } from "../engine/EngineFx";
 import { WindAudio } from "../engine/WindAudio";
 import { onAudioSettingsChanged } from "./AudioSettings";
 import Stats from 'stats-gl';
-import { PerfPanel } from "./PerfPanel";
-import { WorldLightsPanel } from "./WorldLightsPanel";
 import { setLightViewer, getLightSettings, setLightSettings } from "./CarLights";
 import { Weather } from "../engine/Weather";
+
+// Dev-only control panels (PerfPanel = P, WorldLightsPanel = K). Gitignored so clean builds succeed without them.
+const optionalDevPanels = import.meta.glob<{
+  PerfPanel?: new (opts: any) => { endFrame(): void };
+  WorldLightsPanel?: new (opts: any) => { switchLook(id: string): void };
+}>(["./PerfPanel.ts", "./WorldLightsPanel.ts"], { eager: true });
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
@@ -36,8 +40,8 @@ export class Game {
   private composer: EffectComposer;
   private bloom!: UnrealBloomPass;
   private stats: Stats;
-  private perf!: PerfPanel; // debug toggles for finding the GPU bottleneck (press P)
-  worldLights!: WorldLightsPanel; // press K: sun/moon, sky, fog, post FX, ground
+  private perf: { endFrame(): void } | null = null; // debug toggles for finding the GPU bottleneck (press P)
+  worldLights: { switchLook(id: string): void } | null = null; // press K: sun/moon, sky, fog, post FX, ground
   private weather!: Weather;   // weather / time-of-day dropdown
   private perfFlags = { cullFarTerrain: true };
   private frameNo = 0;
@@ -150,27 +154,33 @@ export class Game {
     const smaa = new SMAAPass(window.innerWidth * pr, window.innerHeight * pr);
     this.composer.addPass(smaa);
 
-    this.perf = new PerfPanel({
-      renderer: this.renderer,
-      composer: this.composer,
-      scene: this.scene,
-      sun: this.atmosphere.moonLight,
-      bloom,
-      atmosphere: this.atmospherePass,
-      smaa,
-      flags: this.perfFlags,
-    });
+    const PerfPanelCls = optionalDevPanels["./PerfPanel.ts"]?.PerfPanel;
+    if (PerfPanelCls) {
+      this.perf = new PerfPanelCls({
+        renderer: this.renderer,
+        composer: this.composer,
+        scene: this.scene,
+        sun: this.atmosphere.moonLight,
+        bloom,
+        atmosphere: this.atmospherePass,
+        smaa,
+        flags: this.perfFlags,
+      });
+    }
 
-    this.worldLights = new WorldLightsPanel({
-      theme: this.theme,
-      scene: this.scene,
-      renderer: this.renderer,
-      atmosphere: this.atmosphere,
-      bloom,
-      atmospherePass: this.atmospherePass,
-      skids: this.skids,
-      skidAmbient: this.theme === "night" ? 0.6 : 0.3, // same value as the skids.setLight() call above
-    });
+    const WorldLightsPanelCls = optionalDevPanels["./WorldLightsPanel.ts"]?.WorldLightsPanel;
+    if (WorldLightsPanelCls) {
+      this.worldLights = new WorldLightsPanelCls({
+        theme: this.theme,
+        scene: this.scene,
+        renderer: this.renderer,
+        atmosphere: this.atmosphere,
+        bloom,
+        atmospherePass: this.atmospherePass,
+        skids: this.skids,
+        skidAmbient: this.theme === "night" ? 0.6 : 0.3, // same value as the skids.setLight() call above
+      });
+    }
 
     // --- Weather / time-of-day selector (dropdown at the top of the screen) ---
     this.weather = new Weather({
@@ -181,7 +191,7 @@ export class Game {
       atmospherePass: this.atmospherePass,
       skids: this.skids,
       quality: this.quality,
-      worldLights: this.worldLights,
+      worldLights: this.worldLights ?? undefined,
     });
 
     this.speedEl = document.querySelector("#speed .val")!;
@@ -516,7 +526,7 @@ export class Game {
       }
 
       this.composer.render();
-      this.perf.endFrame();
+      this.perf?.endFrame();
       this.stats.update();
     };
     loop();

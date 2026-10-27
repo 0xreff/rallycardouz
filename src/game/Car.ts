@@ -150,6 +150,9 @@ export class Car {
   private wheelbase = 3;      // m, axle to axle (set from the wheel layout in the constructor)
   private rearHookup = 1;     // 0..1 rear grip "hook-up": 0 with the handbrake pulled, recovers after release
   private appliedEngine = 0; // smoothed engine force (ref EngineRate ramp)
+  private tractionSlip = [0, 0, 0, 0]; // per-wheel: how far the asked drive force is past the tyre's grip (0 = hooked)
+  private _smLong = 0; // smoothed longitudinal chassis accel for the load-transfer torque
+  private _smLat = 0;  // smoothed lateral chassis accel for the load-transfer torque
   private brakePressure = 0; // smoothed 0..1 brake "pedal" (pressure build-up)
   private visualLean = 0;    // cosmetic body roll (radians), eased toward the slide
   private topEndCap = 0;     // current top-speed cap (creeps from topSpeed → vMax)
@@ -175,6 +178,7 @@ export class Car {
   private _velVec = new THREE.Vector3();
   private _fwd = new THREE.Vector3();
   private _right = new THREE.Vector3();
+  private _dvVec = new THREE.Vector3(); // velocity delta this step (for measured body accel)
   // update() self-right scratch
   private _upVec = new THREE.Vector3();
   private _worldUp = new THREE.Vector3(0, 1, 0);
@@ -680,6 +684,8 @@ export class Car {
     // driving (engine, braking, gravity) changes velocity far less than the threshold.
     const dv = velVec.distanceTo(this.prevVel);
     this.impact = nextImpact(this.impact, dv, dt);
+    // Keep this step's velocity delta for the load-transfer torque below, then record.
+    this._dvVec.copy(velVec).sub(this.prevVel);
     this.prevVel.copy(velVec);
 
     // Collision sparks from the chassis (see CarFX) — at the real contact points,
@@ -825,9 +831,14 @@ export class Car {
 
     // (3) Lockup: past `lockupAt` pressure the tyres start to skid. `overbrake` is
     //     how far past (0..1); the rear locks more readily because it's now light.
+    //     At high speed the rear's lockup is FADED by how much the car is already
+    //     slipping — a straight stamp shouldn't whip the tail round, but trail-
+    //     braking into a slide still lets the rear go.
     const overbrake = THREE.MathUtils.clamp((pressure - spec.lockupAt) / (1 - spec.lockupAt), 0, 1);
     const frontLock = Math.min(1, overbrake * frontBrakeShare * 2);
-    const rearLock = handbraking ? 1 : Math.min(1, overbrake * rearBrakeShare * 2.4);
+    const rearSlipNow = Math.abs(Math.atan2(velVec.dot(right), Math.max(speed, 1)));
+    const rearLockSpeedFade = 1 - 0.5 * speedFrac * (1 - THREE.MathUtils.clamp(rearSlipNow / spec.slipAngle, 0, 1));
+    const rearLock = handbraking ? 1 : Math.min(1, overbrake * rearBrakeShare * 2.4 * rearLockSpeedFade);
 
     // ----- Lateral grip = drift slip model, then the braking modifiers above -----
     // Per-axle static→kinetic ramp: the rear breaks loose first (rearGripBias < 1)
@@ -846,7 +857,11 @@ export class Car {
     // lockup → a skidding tyre loses lateral grip (front lock = understeer,
     // rear lock = the tail slides; the handbrake always locks the rear)
     frontSide *= THREE.MathUtils.lerp(1, spec.lockupGrip, frontLock);
-    backSide *= THREE.MathUtils.lerp(1, handbraking ? spec.handbrakeGrip : spec.lockupGrip, rearLock);
+    // The handbrake locks the rear to a grip floor that RISES with speed
+    // (hbSpeedGrip): crawling it snaps into a pivot, at speed the tail steps
+    // out progressively instead of whipping round past you.
+    const hbGrip = spec.handbrakeGrip + (spec.hbSpeedGrip ?? 0) * speedFrac;
+    backSide *= THREE.MathUtils.lerp(1, handbraking ? hbGrip : spec.lockupGrip, rearLock);
     // handbrake release → the rear hooks up gradually, and only fully under throttle while
     // the car is still sliding: a pivot keeps its old course until the driver pushes. The
     // front is eased off by the same ramp (hbFrontGrip) so the two axles stay balanced and
@@ -884,7 +899,12 @@ export class Car {
     backSide *= 1 - powerLoose * powerFade;
     // rear wheels spin in place while the motor overpowers the tyres (visual spin + smoke)
     this.powerSpinAmt = powerLoose * powerFade * THREE.MathUtils.clamp(Math.abs(speed) / 4, 0, 1);
-    this.burnoutSpin += this.powerSpinAmt * controls.throttle * 40 * dt;
+    // Drive wheels spinning past their traction (launch, dirt) whirl visually too.
+    const spinMax = Math.max(
+      this.powerSpinAmt,
+      ...this.tractionSlip.map((s, i) => ((i < 2 ? spec.driveBias.front : spec.driveBias.back) > 0.3 ? s : 0))
+    );
+    this.burnoutSpin += spinMax * controls.throttle * 40 * dt;
     // surface grip → loose ground (dirt) cuts lateral grip per axle (tarmac = 1):
     // the car bites on the road, runs wide and drifts easily on the terrain.
     frontSide *= (this.wheelSurface[0].grip + this.wheelSurface[1].grip) * 0.5;
@@ -912,7 +932,10 @@ export class Car {
       const bias = front ? spec.driveBias.front : spec.driveBias.back;
       const driven = bias > 0.3;
       const lock = front ? frontLock : rearLock;
-      this.wheelSmoke[i] = Math.max(launchSpin * (driven ? bias : 0), lock * moving, driven ? this.powerSpinAmt * 0.8 : 0);
+      this.wheelSmoke[i] = Math.max(
+        launchSpin * (driven ? bias : 0), lock * moving, driven ? this.powerSpinAmt * 0.8 : 0,
+        this.tractionSlip[i] * 0.9 // real wheelspin smokes the tyre
+      );
       // Burnout: the spinning drive wheels pour smoke and scrub a patch in place.
       if (burnout && driven) {
         this.wheelSmoke[i] = Math.max(this.wheelSmoke[i], controls.throttle);
@@ -929,9 +952,23 @@ export class Car {
     for (let i = 0; i < 4; i++) {
       const front = FRONT.includes(i);
       const bias = front ? spec.driveBias.front : spec.driveBias.back;
-      // Loose surfaces transmit less drive (wheelspin on dirt) — per-wheel traction.
-      this.controller.setWheelEngineForce(i, this.appliedEngine * bias * this.wheelSurface[i].traction);
-      this.controller.setWheelSideFrictionStiffness(i, front ? frontSide : backSide);
+      // Tyre traction cap: a tyre can only push the car as hard as the load on it ×
+      // the longitudinal grip coefficient (frictionSlip). Weight transfer swings the
+      // load share, clamped to ±30% so a slide can't starve the drive wheels and kill
+      // the power pull-out. Asking for more than the cap is wheelspin — smoke and
+      // visual spin (above), not more speed — like a real launch on dirt.
+      const ask = this.appliedEngine * bias * this.wheelSurface[i].traction;
+      const axleGrip = front ? frontSide : backSide;
+      const loadShare = THREE.MathUtils.clamp(front ? 1 + transfer : 1 - transfer, 0.7, 1.3);
+      const wheelLoad = spec.mass * Physics.GRAVITY * 0.25 * loadShare * this.wheelSurface[i].traction;
+      const gripCap = spec.frictionSlip * Math.max(wheelLoad, spec.mass * Physics.GRAVITY * 0.05);
+      // Spinning tyres still deliver most of their force (kinetic μ ≈ 80% of
+      // static): past the cap, the excess mostly spins the wheel, some pushes.
+      const over = Math.abs(ask) - gripCap;
+      this.tractionSlip[i] = gripCap > 1 ? Math.max(0, Math.min(1, over / Math.max(gripCap, 1))) : 0;
+      const force = over <= 0 ? ask : Math.sign(ask) * (gripCap + over * 0.45);
+      this.controller.setWheelEngineForce(i, force);
+      this.controller.setWheelSideFrictionStiffness(i, axleGrip);
       this.controller.setWheelBrake(i, 0); // longitudinal braking handled below
     }
 
@@ -951,8 +988,12 @@ export class Car {
     const surfTraction =
       (this.wheelSurface[0].traction + this.wheelSurface[1].traction +
         this.wheelSurface[2].traction + this.wheelSurface[3].traction) / 4;
+    // The handbrake is a slide tool, not a wall: at speed it brakes GENTLY so the
+    // car carries its momentum through the drift instead of dying in it. The
+    // deceleration fades with speed fraction — hard at a crawl, a light drag fast.
+    const hbDecel = spec.handbrake * (1 - 0.55 * speedFrac);
     const decel =
-      (grounded === 0 ? 0 : handbraking ? spec.handbrake * pressure : spec.maxBrake * pressure * footEff) *
+      (grounded === 0 ? 0 : handbraking ? hbDecel * pressure : spec.maxBrake * pressure * footEff) *
       surfTraction;
 
     if (decel > 0) {
@@ -970,6 +1011,20 @@ export class Car {
       const yk = Math.min(1, 1.3 * dt) * (1 - rearLock);
       const rv3 = this._rv3; rv3.x = av.x; rv3.y = av.y * (1 - yk); rv3.z = av.z;
       this.body.setAngvel(rv3, true);
+    }
+
+    // Slide-rate cap: while a brake/handbrake has the rear unhooked, the tail may
+    // swing but never faster than `slideYawCap` — past it the extra yaw is damped,
+    // so a slide stays catchable instead of snapping into a spin. Only gates brake
+    // slides: steering flicks keep their full authority.
+    const yawCap = spec.slideYawCap ?? 0;
+    const brakeSlide = this.rearHookup < 0.9 || rearLock > 0.4;
+    if (yawCap > 0 && grounded > 0 && !airborne && brakeSlide) {
+      const av2 = this.body.angvel();
+      if (Math.abs(av2.y) > yawCap) {
+        const rvC = this._rv3; rvC.x = av2.x; rvC.y = Math.sign(av2.y) * (yawCap + (Math.abs(av2.y) - yawCap) * 0.15); rvC.z = av2.z;
+        this.body.setAngvel(rvC, true);
+      }
     }
 
     // ----- Corner feel: rotation help + corner carry (grounded, driving, not handbraking) -----
@@ -1015,6 +1070,43 @@ export class Car {
       const v = this.body.linvel();
       const rv4 = this._rv3; rv4.x = v.x * 0.5; rv4.y = v.y; rv4.z = v.z * 0.5;
       this.body.setLinvel(rv4, true);
+    }
+
+    // ----- Load transfer torque (the "weight" you feel) -----
+    // Measured horizontal accel this step pitches the body (squat under power, dive
+    // under brakes) and rolls it outward in corners — a real torque, not a visual
+    // trick: the suspension compresses under it, and the stabilizer's free zone
+    // leaves the first few degrees visible before it holds the car.
+    {
+      const dv = this._dvVec;
+      // No load torque while the rear is unhooked / handbrake out: rolling or
+      // pitching the body then just unloads tyres and spins the car.
+      const settled = !handbraking && this.rearHookup > 0.8;
+      if (dt > 0 && !airborne && settled) {
+        // EMA-smoothed chassis accel (~0.15 s): kills the per-step jitter and the
+        // turn-entry spike, keeps the sustained g that should lean the body.
+        // Clamp before smoothing: a clutch-drop or impact spike (~40 m/s²) must
+        // not slingshot the body — the visible lean lives under ~±12 m/s².
+        const aLongRaw = THREE.MathUtils.clamp(dv.dot(fwd) / dt, -20, 20);
+        const aLatRaw = THREE.MathUtils.clamp(dv.dot(right) / dt, -20, 20);
+        this._smLong += (aLongRaw - this._smLong) * Math.min(1, dt / 0.15);
+        this._smLat += (aLatRaw - this._smLat) * Math.min(1, dt / 0.15);
+        const squatDive = spec.squatDive ?? 0;
+        const bodyRollK = spec.bodyRoll ?? 0;
+        if (squatDive > 0 || bodyRollK > 0) {
+          const lever = Math.max(0.3, spec.halfHeight - spec.comOffset.y);
+          const pitchTorque = -this._smLong * spec.mass * lever * squatDive;
+          const rollTorque = THREE.MathUtils.clamp(this._smLat, -30, 30) * spec.mass * lever * bodyRollK;
+          const av = this.body.angvel();
+          const w = this._stabW.set(av.x, av.y, av.z);
+          // Cap the angular kick so a pothole or gear-shift jolt can't snap the
+          // body over — the visible lean is the few degrees inside TILT_FREE.
+          w.addScaledVector(right, THREE.MathUtils.clamp(pitchTorque / spec.inertia.x, -12, 12) * dt);
+          w.addScaledVector(fwd, THREE.MathUtils.clamp(rollTorque / spec.inertia.z, -12, 12) * dt);
+          const rv = this._rv3; rv.x = w.x; rv.y = w.y; rv.z = w.z;
+          this.body.setAngvel(rv, true);
+        }
+      }
     }
 
     // Stabilize: under braking the nose may dip, but only subtly — pitch stays

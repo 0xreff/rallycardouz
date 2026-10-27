@@ -102,6 +102,7 @@ export class BotController {
   }
 
   /** Distance to the nearest obstacle along dir (normalised), or look if clear. */
+  /** Distance to the nearest obstacle along dir (normalised), or look if clear. */
   private cast(origin: THREE.Vector3, dir: THREE.Vector3, look: number): number {
     this._rayDir.copy(dir).normalize();
     if (!this._ray) {

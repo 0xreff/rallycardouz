@@ -568,6 +568,36 @@ export class Track {
     }
   }
 
+  /**
+   * The west sand-road loop as a race course: a closed [x,z] polyline sampled
+   * along the centreline, starting AT the spawn gate and running in the driving
+   * direction, plus the smoothed road height at each sample. Road 0 passes through
+   * SPAWN_XZ heading +Z, so index 0 is the start/finish line.
+   */
+  coursePoints(): { pts: Float32Array; y: Float32Array; n: number } | null {
+    const road = this.roads[0];
+    if (!road) return null;
+    const N = road.n, P = road.pts, Y = road.y;
+    // Find the sample nearest the spawn — that is the start/finish gate.
+    let best = 0, bd = Infinity;
+    for (let k = 0; k < N; k++) {
+      const d = (P[2 * k] - SPAWN_XZ.x) ** 2 + (P[2 * k + 1] - SPAWN_XZ.y) ** 2;
+      if (d < bd) { bd = d; best = k; }
+    }
+    // Re-index so the course starts at the spawn gate and runs forward.
+    const pts = new Float32Array(N * 2), y = new Float32Array(N);
+    for (let k = 0; k < N; k++) {
+      const s = (best + k) % N;
+      pts[2 * k] = P[2 * s]; pts[2 * k + 1] = P[2 * s + 1]; y[k] = Y[s];
+    }
+    return { pts, y, n: N };
+  }
+
+  /** Ground height at a world (x,z) — used to plant race gates on the road surface. */
+  heightAt(x: number, z: number): number {
+    return this.terrainHeight(x, z);
+  }
+
   /** Sync dynamic-prop meshes (cones) to their physics bodies. Once per frame. */
   syncProps() {
     for (const { mesh, body } of this.props) {

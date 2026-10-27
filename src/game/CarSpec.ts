@@ -60,6 +60,8 @@ export interface CarSpec {
   tailSlip: number;         // 0..1 rear grip given up while cornering at speed
   powerOversteer: number;   // 0..1 throttle mid-corner loosens the driven rear (steer with the throttle)
   handbrakeGrip: number;    // 0..1 rear side grip left with the handbrake pulled (handbrake turns)
+  hbSpeedGrip?: number;     // extra rear grip the handbrake keeps at top speed (0 = snap pivot at any speed)
+  slideYawCap?: number;     // rad/s: the fastest the tail may swing round in a brake slide (catchable, not a snap)
   hbRecoverTime: number;    // s for the rear to hook back up after the handbrake is released
   hbHookup: number;         // 0..1 rear grip it settles at while still sliding with NO throttle (throttle pushes it to 1)
   hbFrontGrip: number;      // 0..1 front side grip right after release while the rear is unhooked (balances the axles: slide, don't spin)
@@ -84,6 +86,13 @@ export interface CarSpec {
   brakeRamp: number;
   lockupAt: number;
   lockupGrip: number;
+
+  // Load-transfer torque (0..1 of the real m·a·h lever torque applied to the body).
+  // squatDive: longitudinal accel pitches the body (squat under power, dive under
+  // brakes). bodyRoll: lateral accel rolls the body outward in corners. The
+  // stabilizer's free zone lets it build a few visible degrees, then holds it.
+  squatDive?: number;
+  bodyRoll?: number;
 
   // Suspension & grip. Rapier's stiffness/damping are per unit of chassis mass, so
   // they don't need retuning when mass changes. Static sag = g / (4 · stiffness),
@@ -178,11 +187,12 @@ const TOYOTA: CarInput = {
   steerSlew: 4.0, steerYawLow: 1.30, steerYawHigh: 1.45,
   slipThreshold: 3.2, slipAngle: 0.200, kineticGripRatio: 0.80,
   rearGripBias: 1.00, liftoffOversteer: 0.28, tailSlip: 0.27,
-  powerOversteer: 1.5, handbrakeGrip: 0.17,
+  powerOversteer: 1.5, handbrakeGrip: 0.17, hbSpeedGrip: 0.28, slideYawCap: 1.15,
   hbRecoverTime: 1.30, hbHookup: 0.56, hbFrontGrip: 0.30, counterSteer: 0.25, counterSteerMax: 0.10,
   yawAssist: 8, yawAssistMax: 12, yawAssistLat: 70, cornerCarry: 1.2, tailKick: 0.1,
   leanStrength: 0.04, leanLowSpeedAmp: 1.8,
   brakeBiasFront: 0.65, weightTransfer: 0.25, accelTransfer: 0.15, brakeRamp: 20, lockupAt: 0.97, lockupGrip: 0.35,
+  squatDive: 0.7, bodyRoll: 0.14,
   ...RALLY_SUSPENSION,
   suspensionStiffness: 38, suspensionCompression: 2.8, suspensionRelaxation: 4.3,
   frictionSlip: 1.82, sideFrictionStiffness: 1.90,

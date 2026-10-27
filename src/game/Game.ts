@@ -17,6 +17,7 @@ import { AtmospherePass } from "../engine/AtmospherePass";
 import { Car } from "./Car";
 import { CARS, DEFAULT_CAR } from "./CarSpec";
 import { Track } from "./Track";
+import { Race } from "./Race";
 import { BotController } from "./BotController";
 import { rpmFraction, isShifting, BOOST_TIME } from "./gearbox";
 import { EngineAudio } from "../engine/EngineAudio";
@@ -71,6 +72,9 @@ export class Game {
   private theme: Theme = detectTheme();
   private speedEl: HTMLElement;
   private carNameEl: HTMLElement | null;
+  private race: Race | null = null;
+  private raceEls: Partial<Record<string, HTMLElement | null>> = {};
+  private lastRaceTxt: Record<string, string> = {}; // only touch the DOM when a value changes
   private lastDisplayedSpeed = -1;
   private gearEl: HTMLElement | null;
   private rpmEl: HTMLElement | null;
@@ -130,6 +134,16 @@ export class Game {
     const randomBot = CARS[botKeys[Math.floor(Math.random() * botKeys.length)]];
     this.bot = new Car(this.physics, this.scene, botSpawn, randomBot, this.skids, this.sparks, this.smoke, this.dust, this.track.surfaces, { fxSlot: 1 });
     this.botAI = new BotController(this.physics, this.bot);
+
+    // --- Race: the west sand-road loop is the course. Gates are laid on it and the
+    // car is parked on the start line; a countdown locks the controls before green.
+    // The bot is NOT on the course — it stays a free-roaming ambient car (the map
+    // stays alive); the race is you vs the lap timer. ---
+    this.race = new Race(this.track, this.scene);
+    this.race.start(this.car);
+    for (const id of ["raceLap", "raceTime", "raceLapTime", "raceBest", "racePos", "raceGate", "raceCount", "racePanel", "gateCompass", "compassArrow", "gateDist"]) {
+      this.raceEls[id] = document.getElementById(id);
+    }
 
     // --- Post-processing ---
     // RenderPass → UnrealBloom → AtmospherePass (moon god rays + violet grade)
@@ -391,12 +405,17 @@ export class Game {
       requestAnimationFrame(loop);
       const dt = Math.min(this.clock.getDelta(), 1 / 20);
       const controls = this.input.sample();
+      // The countdown pins both cars until the green — strip drive so revving on the
+      // line doesn't creep the car off the start.
+      if (this.race?.locked()) { controls.throttle = 0; controls.brake = 0; controls.steer = 0; }
+      this.race?.update(dt);
 
       if (controls.cycleCar) this.cycleCar();
       if (controls.changeView) this.chase.cycleMode();
 
       if (controls.reset) {
-        this.car.reset();
+        // In a race, R restarts from the grid; otherwise it resets to spawn.
+        this.race?.reset();
         const ct = this._camTarget;
         this.car.position(ct.position);
         this.car.forwardVector(ct.forward);
@@ -408,8 +427,12 @@ export class Game {
       }
 
       if (controls.recover) this.car.recover();
-      // A teleport (reset / recover) must not be blended from the old spot.
-      if (controls.reset || controls.recover) this.car.savePreviousState();
+      // A teleport (reset / recover) must not be blended from the old spot — and a
+      // race reset also teleports the bot back to the grid.
+      if (controls.reset || controls.recover) {
+        this.car.savePreviousState();
+        if (controls.reset) this.bot.savePreviousState();
+      }
 
       // Physics advances in fixed 60 Hz substeps (framerate-independent
       // handling); car forces are applied immediately before each substep.
@@ -421,7 +444,13 @@ export class Game {
         this.car.savePreviousState();
         this.bot.savePreviousState();
         this.car.update(controls, fixedDt);
-        this.bot.update(this.botAI.sample(fixedDt), fixedDt); // AI opponent
+        // AI opponent — frozen on the line during the countdown (don't even sample:
+        // sitting at zero speed would trip its stuck-recovery into a reverse).
+        // Handbrake pins it: at a standstill it force-holds position without engaging
+        // reverse the way the foot brake would.
+        const locked = this.race?.locked() ?? false;
+        const botCtl = locked ? { throttle: 0, brake: 0, steer: 0, handbrake: true } : this.botAI.sample(fixedDt);
+        this.bot.update(botCtl, fixedDt);
       });
       const alpha = this.physics.alpha;
       this.car.syncMeshes(alpha);
@@ -523,6 +552,61 @@ export class Game {
           gb.shiftDir,
           gb.boostTimer > 0 ? gb.boostTimer / BOOST_TIME : 0
         );
+      }
+
+      // Race HUD: lap, times, position, countdown. DOM writes only on change.
+      if (this.race) {
+        const h = this.race.hud();
+        const set = (id: string, txt: string) => {
+          if (this.lastRaceTxt[id] !== txt) {
+            const el = this.raceEls[id];
+            if (el) el.textContent = txt;
+            this.lastRaceTxt[id] = txt;
+          }
+        };
+        const fmt = (s: number) => {
+          const m = Math.floor(s / 60), sec = s - m * 60;
+          return `${m}:${sec.toFixed(3).padStart(6, "0")}`;
+        };
+        set("raceLap", h.finished ? "FINISH" : `LAP ${h.lap}/${h.totalLaps}`);
+        set("raceTime", fmt(h.raceTime));
+        set("raceLapTime", h.lastLap > 0 ? `LAST ${fmt(h.lastLap)}` : `LAP ${fmt(h.lapTime)}`);
+        set("raceBest", h.bestLap > 0 ? `BEST ${fmt(h.bestLap)}` : "");
+        // Delta vs best lap: green when ahead, red when behind.
+        if (!h.finished && h.bestLap > 0 && h.delta !== 0) {
+          const sign = h.delta <= 0 ? "-" : "+";
+          set("racePos", `${sign}${Math.abs(h.delta).toFixed(2)}`);
+          this.raceEls["racePos"] && (this.raceEls["racePos"]!.style.color = h.delta <= 0 ? "#4dff88" : "#ff6a5a");
+        } else {
+          set("racePos", h.finished ? "DONE" : "");
+        }
+        set("raceGate", h.finished ? "" : `GATE ${h.gateIndex}/8`);
+
+        // Compass: rotate the arrow by the gate bearing (CSS rotate is clockwise
+        // positive, same sign as the bearing), and show the distance below it.
+        const compass = this.raceEls["gateCompass"];
+        if (compass) compass.style.display = h.phase === "live" && !h.finished ? "" : "none";
+        const arrow = this.raceEls["compassArrow"];
+        if (arrow) arrow.style.transform = `rotate(${(h.gateBearing * 57.2958).toFixed(1)}deg)`;
+        const distEl = this.raceEls["gateDist"];
+        const distTxt = h.gateDist > 999 ? `${(h.gateDist / 1000).toFixed(1)}km` : `${Math.round(h.gateDist)}m`;
+        if (distEl && this.lastRaceTxt["gd"] !== distTxt) {
+          distEl.textContent = distTxt;
+          this.lastRaceTxt["gd"] = distTxt;
+        }
+
+        const cd = this.raceEls["raceCount"];
+        if (cd) {
+          // Show during countdown AND for a beat after green ("GO!").
+          const show = h.phase === "countdown" || (h.phase === "live" && h.raceTime < 0.8);
+          const txt = h.phase === "live" || h.countdown === 0 ? "GO!" : String(h.countdown);
+          cd.style.display = show ? "" : "none";
+          if (show && this.lastRaceTxt["cd"] !== txt) {
+            cd.textContent = txt;
+            cd.className = txt === "GO!" ? "cd-go" : "cd-num";
+            this.lastRaceTxt["cd"] = txt;
+          }
+        }
       }
 
       this.composer.render();

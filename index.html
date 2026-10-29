@@ -9,6 +9,7 @@
   <link rel="preload" href="./assets/toyota.glb" as="fetch" crossorigin />
   <link rel="preload" href="./assets/toyota6.glb" as="fetch" crossorigin />
   <link rel="preload" href="./assets/toyota-24.glb" as="fetch" crossorigin />
+  <link rel="preload" href="./assets/porsche.glb" as="fetch" crossorigin />
   <!-- Preload audio manifests so engine sounds are ready immediately -->
   <link rel="preload" href="./assets/audio/engine/manifest.json" as="fetch" crossorigin />
   <link rel="preload" href="./assets/audio/engine/toyota/manifest.json" as="fetch" crossorigin />
@@ -1158,10 +1159,203 @@
       .car-animate-in,
       .enter-btn .sweep { animation: none !important; }
     }
+
+    /* ===================================================================
+       MOBILE RESTRICTION OVERLAY
+       =================================================================== */
+    #mobile-gate {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: var(--background);
+      overflow: hidden;
+      text-align: center;
+      padding: 32px 24px;
+    }
+
+    #mobile-gate.active {
+      display: flex;
+    }
+
+    /* Animated background glow */
+    #mobile-gate::before {
+      content: '';
+      position: absolute;
+      width: 420px;
+      height: 420px;
+      border-radius: 50%;
+      background: radial-gradient(circle, oklch(0.72 0.19 50 / 18%) 0%, transparent 70%);
+      animation: mgate-pulse 4s ease-in-out infinite alternate;
+      pointer-events: none;
+    }
+
+    @keyframes mgate-pulse {
+      from { transform: scale(0.85); opacity: 0.5; }
+      to   { transform: scale(1.2);  opacity: 1; }
+    }
+
+    .mgate-icon {
+      position: relative;
+      width: 88px;
+      height: 88px;
+      margin-bottom: 28px;
+    }
+
+    /* Desktop monitor icon */
+    .mgate-icon svg {
+      width: 100%;
+      height: 100%;
+      filter: drop-shadow(0 0 24px oklch(0.72 0.19 50 / 55%));
+    }
+
+    /* Red X over the phone icon */
+    .mgate-icon .mgate-slash {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 70px;
+      height: 70px;
+      transform: translate(-50%, -50%);
+    }
+
+    .mgate-icon .mgate-slash svg {
+      filter: drop-shadow(0 0 8px oklch(0.65 0.2 25 / 60%));
+    }
+
+    .mgate-title {
+      position: relative;
+      font-family: var(--font-display);
+      font-size: clamp(22px, 5vw, 36px);
+      font-weight: 900;
+      letter-spacing: 0.12em;
+      background: linear-gradient(135deg, #ffb660, #ff6a3d);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      margin-bottom: 12px;
+    }
+
+    .mgate-subtitle {
+      position: relative;
+      font-family: var(--font-body);
+      font-size: clamp(14px, 3vw, 18px);
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: var(--muted-foreground);
+      max-width: 420px;
+      line-height: 1.6;
+      margin-bottom: 32px;
+    }
+
+    .mgate-badge {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 24px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      backdrop-filter: blur(12px);
+      font-family: var(--font-display);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.3em;
+      color: var(--foreground);
+      clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+    }
+
+    .mgate-badge svg {
+      color: var(--primary);
+      flex-shrink: 0;
+    }
+
+    .mgate-hint {
+      position: relative;
+      margin-top: 24px;
+      font-family: var(--font-body);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      color: oklch(0.5 0.01 260);
+    }
+
   </style>
 </head>
 
 <body>
+  <!-- ================================================================
+       0. MOBILE RESTRICTION GATE (blocks mobile/tablet users)
+       ================================================================ -->
+  <div id="mobile-gate">
+    <!-- Phone-with-slash icon -->
+    <div class="mgate-icon">
+      <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" color="#ff6a3d">
+        <rect x="18" y="8" width="28" height="48" rx="4" />
+        <line x1="28" y1="48" x2="36" y2="48" />
+      </svg>
+      <div class="mgate-slash">
+        <svg viewBox="0 0 64 64" fill="none" stroke="#ff3a3a" stroke-width="4" stroke-linecap="round">
+          <line x1="8" y1="8" x2="56" y2="56" />
+        </svg>
+      </div>
+    </div>
+
+    <h1 class="mgate-title">DESKTOP ONLY</h1>
+    <p class="mgate-subtitle">
+      Revolt Reborn requires a keyboard and a powerful GPU to run.
+      Please open this page on a desktop or laptop computer for the full experience.
+    </p>
+
+    <div class="mgate-badge">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2" />
+        <line x1="8" y1="21" x2="16" y2="21" />
+        <line x1="12" y1="17" x2="12" y2="21" />
+      </svg>
+      USE A PC OR LAPTOP
+    </div>
+
+    <p class="mgate-hint">This game uses WebGL, keyboard controls, and desktop-grade performance.</p>
+  </div>
+
+  <script>
+    // Mobile / tablet detection — runs synchronously before any game code.
+    (function detectMobile() {
+      var isMobile = false;
+
+      // 1. User-agent check (covers most phones & tablets)
+      var ua = navigator.userAgent || navigator.vendor || '';
+      if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)) {
+        isMobile = true;
+      }
+
+      // 2. iPad on iOS 13+ reports as Mac — detect via touch + screen
+      if (!isMobile && navigator.maxTouchPoints && navigator.maxTouchPoints > 2 && /MacIntel/.test(navigator.platform)) {
+        isMobile = true;
+      }
+
+      // 3. Small-screen fallback (phones & small tablets)
+      if (!isMobile && (window.innerWidth <= 1024 && ('ontouchstart' in window || navigator.maxTouchPoints > 0))) {
+        isMobile = true;
+      }
+
+      if (isMobile) {
+        document.getElementById('mobile-gate').classList.add('active');
+        // Hide all game content so nothing loads behind the gate
+        var ids = ['garage', 'garage-loading', 'app', 'hud', 'loader', 'garageTransition'];
+        ids.forEach(function(id) {
+          var el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+        // Prevent main.ts from booting
+        window.__MOBILE_BLOCKED = true;
+      }
+    })();
+  </script>
+
   <!-- ================================================================
        1. GARAGE — Car selection screen (visible first)
        ================================================================ -->
@@ -1172,7 +1366,7 @@
     <!-- Top bar -->
     <header class="garage-header">
       <div class="garage-logo">REVOLT <span>REBORN</span></div>
-      <div class="garage-counter" id="garageCounter">GARAGE · 01/03</div>
+      <div class="garage-counter" id="garageCounter">GARAGE · 01/04</div>
     </header>
 
     <!-- Main content -->
@@ -1351,6 +1545,14 @@
           hue: "oklch(0.72 0.19 25)",
           stats: { Speed: 96, Handling: 80, Acceleration: 85, Grip: 82 },
           hp: 560, weight: "1,240 kg", drive: "RWD"
+        },
+        {
+          id: "porsche", game: "porsche",
+          name: "PORSCHE 911", tag: "Porsche · Rally Sport",
+          img: "./assets/garage/porsche.png",
+          hue: "oklch(0.65 0.25 25)",
+          stats: { Speed: 98, Handling: 86, Acceleration: 96, Grip: 80 },
+          hp: 620, weight: "1,100 kg", drive: "RWD"
         }
       ];
 

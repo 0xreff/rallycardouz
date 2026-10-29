@@ -18,7 +18,7 @@ async function preloadAssets(): Promise<void> {
   const base = import.meta.env.BASE_URL;
 
   // --- 1. GLB models ---
-  const models = ["toyota.glb", "toyota6.glb", "toyota-24.glb"];
+  const models = ["toyota.glb", "toyota6.glb", "toyota-24.glb", "porsche.glb"];
   const modelFetches = models.map((m) =>
     fetch(`${base}assets/${m}`).catch(() => { })
   );
@@ -150,4 +150,7 @@ async function boot() {
   }
 }
 
-boot();
+// Only boot the game if the mobile gate has not blocked the user.
+if (!(window as any).__MOBILE_BLOCKED) {
+  boot();
+}

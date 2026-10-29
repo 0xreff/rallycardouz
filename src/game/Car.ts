@@ -17,7 +17,62 @@ import {
 } from "./handling";
 import { createGearbox, stepGearbox, driveMultiplier, speedCap, sixthReady, type GearboxState } from "./gearbox";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import type { CarSpec } from "./CarSpec";
+
+// Shared Draco decoder for compressed .glb models (e.g. porsche.glb). The decoder files are
+// fetched from Google's CDN. To self-host instead, copy node_modules/three/examples/jsm/libs/draco
+// to public/draco and use `${import.meta.env.BASE_URL}draco/` as the path.
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.7/");
+
+/**
+ * Models exported with EXT_mesh_gpu_instancing store the wheels as ONE instanced mesh, so
+ * there are no separate "wheel" nodes for the physics to drive. Expand every instanced mesh
+ * into plain Groups named "Wheel_n" (one per instance) so bindModelWheels / fitModelToPhysics
+ * find them like in the Toyota models. When there are more than 4 instances (e.g. a spare),
+ * the 4 lowest ones are the road wheels and the rest are renamed "spare_wheel_n" (ignored).
+ */
+function splitInstancedWheels(model: THREE.Object3D): void {
+  model.updateMatrixWorld(true);
+  const byParent = new Map<THREE.Object3D, THREE.InstancedMesh[]>();
+  model.traverse((o) => {
+    const im = o as THREE.InstancedMesh;
+    if (im.isInstancedMesh && o.parent) {
+      const list = byParent.get(o.parent) ?? [];
+      list.push(im);
+      byParent.set(o.parent, list);
+    }
+  });
+
+  for (const [parent, meshes] of byParent) {
+    const count = meshes[0].count;
+    const inst = new THREE.Matrix4();
+    const local = new THREE.Matrix4();
+    const wheels: { group: THREE.Group; y: number }[] = [];
+
+    for (let i = 0; i < count; i++) {
+      const group = new THREE.Group();
+      meshes[0].getMatrixAt(i, inst);
+      local.multiplyMatrices(meshes[0].matrix, inst);
+      local.decompose(group.position, group.quaternion, group.scale);
+      for (const im of meshes) {
+        const mesh = new THREE.Mesh(im.geometry, im.material);
+        mesh.name = `${im.name || "part"}_${i}`;
+        group.add(mesh);
+      }
+      wheels.push({ group, y: group.position.y });
+    }
+
+    wheels.sort((a, b) => a.y - b.y);
+    wheels.forEach((w, rank) => {
+      w.group.name = rank < 4 ? `Wheel_${rank}` : `spare_wheel_${rank}`;
+      parent.add(w.group);
+    });
+    for (const im of meshes) parent.remove(im);
+  }
+}
+
 
 
 /** Convert a GLB material to RimMaterial while preserving the per-part PBR look. */
@@ -336,6 +391,7 @@ export class Car {
     if (spec.modelFile || spec.name === "Tank" || spec.name === "Toyota" || spec.name === "Ram") {
       const root = new THREE.Group();
       const loader = new GLTFLoader();
+      loader.setDRACOLoader(dracoLoader);
 
       const assetBase = `${import.meta.env.BASE_URL}assets/`;
       let glbPath = `${assetBase}d01c4c8e1685f8a60e41844cdde58a22.glb`;
@@ -345,6 +401,7 @@ export class Car {
 
       loader.load(glbPath, (gltf) => {
         const model = gltf.scene;
+        splitInstancedWheels(model); // instanced wheels -> separate Wheel_n nodes
         // Preferred: fit the model to the physics wheels. Falls back to the
         // bounding-box fit below when the model has no separate wheel nodes.
         if (this.fitModelToPhysics(root, model, spec)) return;

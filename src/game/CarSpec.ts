@@ -233,6 +233,77 @@ export const CARS: Record<string, CarSpec> = {
     keepModelWheelSize: true, wheelRadius: 0.461, wheelXOffset: -0.064,
     engineSound: "toyota6", // reuses the Toyota engine loops (no toyota-24 recording yet)
   }),
+
+  // Porsche: inherits Toyota6 base but tuned for raw speed — powerful acceleration,
+  // acceleration through leans (high cornerCarry + accelTransfer), 260 km/h top speed.
+  porsche: makeCar({
+    ...TOYOTA,
+    name: "Porsche",
+    color: 0xcc0000,
+    mass: 2200,                        // lighter than Toyota6 (2400) — sports car
+    modelFile: "porsche.glb",
+    halfWidth: 0.90, halfHeight: 0.45, halfLength: 2.30,  // sleeker, lower profile
+    // Keep the Blender tyre size. 0.443 m is computed from porsche.glb (tyre radius x instance scale
+    // x the wheelbase fit); confirm with the "[CarSpec Porsche] fitted model" dev console line.
+    keepModelWheelSize: true, wheelRadius: 0.443, wheelWidth: 0.26,
+
+    // --- Power & speed: 260 km/h ≈ 72.2 m/s ---
+    engineAccel: 26,                   // punchy acceleration (Toyota6 = 17)
+    reverseAccel: 9,
+    topSpeed: 72.2,                    // 260 km/h
+    launchSpeed: 18,                   // stronger off-the-line pull
+    launchBoost: 1.5,                  // aggressive launch boost
+    overspeed: 0.10,                   // small overspeed window at 260+
+    overspeedAccel: 1.5,
+
+    // --- Steering: sharp and responsive ---
+    maxSteer: 0.62,
+    steerRate: 9,
+    steerSlew: 4.5,
+    steerYawLow: 1.40,
+    steerYawHigh: 1.60,                // stronger high-speed steering
+    turnSlowdown: 0.01,                // minimal speed loss in turns
+
+    // --- Acceleration through leans ---
+    cornerCarry: 1.8,                  // high: keeps speed in corners under throttle (Toyota = 1.2)
+    accelTransfer: 0.30,               // more weight transfer — rear pushes harder mid-corner (Toyota = 0.15)
+    yawAssist: 10,
+    yawAssistMax: 14,
+    yawAssistLat: 80,
+
+    // --- Grip & slide ---
+    slipThreshold: 3.5,
+    slipAngle: 0.180,
+    kineticGripRatio: 0.82,
+    tailSlip: 0.22,
+    powerOversteer: 1.3,               // manageable tail on throttle
+    liftoffOversteer: 0.24,
+
+    // --- Lean visuals: more body lean for sporty feel ---
+    leanStrength: 0.05,
+    leanLowSpeedAmp: 2.0,
+    squatDive: 0.8,
+    bodyRoll: 0.18,
+
+    // --- Suspension: stiffer for sports car ---
+    suspensionStiffness: 42,
+    suspensionCompression: 3.0,
+    suspensionRelaxation: 4.5,
+    frictionSlip: 1.90,
+    sideFrictionStiffness: 2.00,
+
+    // --- Brakes ---
+    maxBrake: 28,                      // strong brakes for high speed
+    handbrake: 5.0,
+
+    // --- Visual fitting ---
+    visualScaleMultiplier: 2.0,
+    wheelZInsetFront: 0.90,
+    wheelZInsetRear: 0.90,
+    wheelXOffset: 0,
+
+    engineSound: "toyota6",            // reuses Toyota6 engine loops
+  }),
 };
 
 export const DEFAULT_CAR = "toyota";
